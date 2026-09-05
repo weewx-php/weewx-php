@@ -8,7 +8,9 @@ use DateTimeZone;
 use Generator;
 use WeewxPhp\Config\JournalMode;
 use WeewxPhp\Db\DbError;
+use WeewxPhp\Db\Json;
 use WeewxPhp\Db\Sqlite;
+use WeewxPhp\Live\Packet;
 use WeewxPhp\Weewx\Accum;
 use WeewxPhp\Weewx\ColumnType;
 use WeewxPhp\Weewx\Intervals;
@@ -45,6 +47,8 @@ final class ArchiveDb implements History
 
     /** @var array<string, int> Fields dropped for want of a column, and how often. */
     private array $homeless = [];
+
+    private ?bool $hasHardware = null;
 
     private function __construct(
         private readonly Sqlite $db,
@@ -181,7 +185,62 @@ final class ArchiveDb implements History
     public function unitSystem(): ?UnitSystem
     {
         $value = $this->db->scalar(sprintf('SELECT usUnits FROM %s LIMIT 1', $this->quoted($this->tableName)));
+        if ($value === null && $this->hasHardware()) {
+            $value = $this->db->scalar('SELECT usUnits FROM weewx_hardware LIMIT 1');
+        }
         return is_int($value) ? UnitSystem::tryFrom($value) : null;
+    }
+
+    public function hasHardware(): bool
+    {
+        return $this->hasHardware ??= in_array('weewx_hardware', $this->db->tables(), true);
+    }
+
+    /** Original mapped hardware records survive live retention and target-grid changes.
+     * @param array<string, mixed> $record
+     */
+    public function preserveHardware(string $source, array $record): bool
+    {
+        $stop = $record['dateTime'] ?? null;
+        $interval = $record['interval'] ?? null;
+        $units = $record['usUnits'] ?? null;
+        if (!is_int($stop) || (!is_int($interval) && !is_float($interval)) || $interval <= 0 || $interval > 1440 || !is_int($units)) {
+            throw new IntervalError('Invalid original hardware interval');
+        }
+        $start = $stop - (int) round($interval * 60);
+        if (!$this->hasHardware()) {
+            $this->db->exec(Hardware::SCHEMA);
+            $this->hasHardware = true;
+        }
+        $json = Packet::canonical($record);
+        return $this->db->transaction(function () use ($source, $record, $start, $stop, $units, $json): bool {
+            $previous = $this->db->scalar('SELECT record FROM weewx_hardware WHERE source = ? AND start = ? AND stop = ? LIMIT 1', [$source, $start, $stop]);
+            if ($previous === $json) {
+                return false;
+            }
+            $this->db->exec('DELETE FROM weewx_hardware WHERE source = ? AND start = ? AND stop = ?', [$source, $start, $stop]);
+            $day = Intervals::startOfArchiveDay($stop, $this->zone);
+            foreach ($record as $field => $value) {
+                if (!in_array($field, Wview::NOT_OBSERVATIONS, true) && (is_int($value) || is_float($value)) && is_finite((float) $value)) {
+                    $this->db->exec('INSERT INTO weewx_hardware VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [$field, $source, $start, $stop, $day, $units, $value, $json]);
+                }
+            }
+            return true;
+        });
+    }
+
+    /** @return list<array{source: string, start: int, stop: int, record: array<string, mixed>}> */
+    public function hardwareRecords(int $start, int $stop): array
+    {
+        if (!$this->hasHardware()) {
+            return [];
+        }
+        $records = [];
+        foreach ($this->db->query('SELECT DISTINCT source, start, stop, record FROM weewx_hardware WHERE stop > ? AND stop <= ? ORDER BY stop, source', [$start, $stop]) as $row) {
+            $records[] = ['source' => Sqlite::text($row['source']), 'start' => (int) Sqlite::text($row['start']),
+                'stop' => (int) Sqlite::text($row['stop']), 'record' => Json::object(Sqlite::text($row['record']))];
+        }
+        return $records;
     }
 
     public function firstTimestamp(): ?int

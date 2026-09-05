@@ -236,6 +236,8 @@ and repeatable commands.
 - [docs/commands.md](docs/commands.md): every command, with its arguments and exit status.
 - [docs/design.md](docs/design.md): how it is built, where it departs from WeeWX and why, and what the conformance checks prove.
 - [docs/native-ingest.md](docs/native-ingest.md): native collector setup, JSON v1 contract, acknowledgements and replay.
+- [docs/native-ingest-v2.md](docs/native-ingest-v2.md): hardware logger records, durable catch-up and resolution-aware history.
+- [docs/native-ingest-v3.md](docs/native-ingest-v3.md): one adoptable station per RTL-SDR, GW1000 or WeatherFlow/Tempest sensor.
 - [docs/admin-design.md](docs/admin-design.md): the admin interface architecture and implementation plan.
 
 ## Licence

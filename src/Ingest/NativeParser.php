@@ -7,9 +7,10 @@ namespace WeewxPhp\Ingest;
 use JsonException;
 use stdClass;
 use WeewxPhp\Config\Settings;
+use WeewxPhp\Live\PacketKind;
 use WeewxPhp\Weewx\UnitSystem;
 
-/** Version 1 accepts individual WeeWX LOOP observations, never extracted averages. */
+/** v1 LOOP observations; v2 additionally accepts original hardware archive records. */
 final class NativeParser
 {
     public const MAX_BYTES = 262144;
@@ -33,7 +34,7 @@ final class NativeParser
         return max(0, min(self::MAX_AGE, $settings->liveRetention - 2 * 86400));
     }
 
-    /** @return array{collector: string, events: list<NativeEvent>} */
+    /** @return array{version: int, collector: string, events: list<NativeEvent>} */
     public static function parse(string $body): array
     {
         if (strlen($body) > self::MAX_BYTES) {
@@ -49,7 +50,8 @@ final class NativeParser
         }
         self::uniqueKeys($body);
         self::keys($root, ['version', 'collector_id', 'packets']);
-        if (($root->version ?? null) !== 1) {
+        $version = $root->version ?? null;
+        if ($version !== 1 && $version !== 2 && $version !== 3) {
             throw new Rejected('unsupported_version');
         }
         $collector = self::uuid($root->collector_id ?? null);
@@ -60,26 +62,38 @@ final class NativeParser
         $events = [];
         $seen = [];
         foreach ($packets as $packet) {
-            $event = self::event($packet);
+            $event = self::event($packet, $version);
             if (isset($seen[$event->id])) {
                 throw new Rejected('duplicate_event_id');
             }
             $seen[$event->id] = true;
             $events[] = $event;
         }
-        return ['collector' => $collector, 'events' => $events];
+        return ['version' => $version, 'collector' => $collector, 'events' => $events];
     }
 
-    private static function event(mixed $packet): NativeEvent
+    private static function event(mixed $packet, int $version): NativeEvent
     {
         if (!$packet instanceof stdClass) {
             throw new Rejected('invalid_packet');
         }
-        self::keys($packet, ['station_id', 'event_id', 'driver_module', 'kind', 'dateTime', 'usUnits', 'data']);
+        self::keys($packet, ['station_id', 'event_id', 'driver_module', 'kind', 'dateTime', 'usUnits', 'data', ...($version >= 2 ? ['interval'] : []), ...($version === 3 ? ['source'] : [])]);
         $station = self::uuid($packet->station_id ?? null);
         $id = self::uuid($packet->event_id ?? null);
-        if (($packet->kind ?? null) !== 'loop') {
+        $kind = is_string($packet->kind ?? null) ? PacketKind::tryFrom($packet->kind) : null;
+        if ($kind === null || ($version === 1 && $kind !== PacketKind::Loop)) {
             throw new Rejected('unsupported_kind');
+        }
+        $interval = null;
+        if ($kind === PacketKind::Archive) {
+            $value = $packet->interval ?? null;
+            if ((!is_int($value) && !is_float($value)) || !is_finite((float) $value)
+                || $value * 60 < 1 || $value > 1440 || abs($value * 60 - round($value * 60)) > 0.000001) {
+                throw new Rejected('invalid_interval');
+            }
+            $interval = (float) $value;
+        } elseif (property_exists($packet, 'interval')) {
+            throw new Rejected('unexpected_interval');
         }
         $module = $packet->driver_module ?? null;
         if (!is_string($module) || strlen($module) > 160
@@ -87,7 +101,8 @@ final class NativeParser
             throw new Rejected('invalid_driver_module');
         }
         $timestamp = $packet->dateTime ?? null;
-        if (!is_int($timestamp) || $timestamp < 1 || $timestamp > 253402300799) {
+        if (!is_int($timestamp) || $timestamp < 1 || $timestamp > 253402300799
+            || ($interval !== null && $timestamp <= (int) round($interval * 60))) {
             throw new Rejected('invalid_timestamp');
         }
         $code = $packet->usUnits ?? null;
@@ -110,7 +125,15 @@ final class NativeParser
             }
             $data[$name] = $value;
         }
-        return new NativeEvent($station, $id, $module, $timestamp, $units, $data);
+        $source = property_exists($packet, 'source') ? SensorSource::parse($packet->source) : null;
+        if ($source !== null && ($module !== SensorSource::MODULES[$source['type']] || $kind !== PacketKind::Loop
+            || $station !== SensorSource::stationId($source))) {
+            throw new Rejected('sensor_identity_mismatch');
+        }
+        if (in_array($module, SensorSource::MODULES, true) && $source === null) {
+            throw new Rejected('sensor_source_required');
+        }
+        return new NativeEvent($station, $id, $module, $timestamp, $units, $data, $kind, $interval, $source);
     }
 
     /** @param list<string> $allowed */

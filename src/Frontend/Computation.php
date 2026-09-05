@@ -16,6 +16,12 @@ final class Computation
     private Accumulator $stats;
     /** @var list<array{start: int, end: int, value: int|float|bool|string|Vector|null, coverage: float|null}> */
     private array $points = [];
+    /** @var list<array{start: int, end: int, value: int|float|bool|string|Vector|null, coverage: float|null}> */
+    private array $fallback = [];
+    private ?int $fallbackCursor = null;
+    private bool $fallbackDone = false;
+    private ?int $dailyCursor = null;
+    private ?Accumulator $dailyStats = null;
     /** @var list<array<string, mixed>> */
     private array $excluded = [];
     /** @var list<Span> */
@@ -107,7 +113,7 @@ final class Computation
     public function step(ReadBudget $budget, ?Cache $cache = null): bool
     {
         if ($this->index >= count($this->spans)) {
-            return true;
+            return $this->fallbackStep($budget);
         }
         $spec = $this->spec;
         $span = $this->spans[$this->index];
@@ -164,7 +170,7 @@ final class Computation
         $historical = str_starts_with($spec->aggregate, 'historical_');
         $degrees = in_array($spec->observation, ['heatdeg', 'cooldeg', 'growdeg'], true);
         $obs = $degrees ? 'outTemp' : ($spec->observation === 'windvec' && in_array($spec->aggregate, ['avg', 'not_null', 'has_data'], true) ? 'wind' : $spec->observation);
-        $daily = $this->usesDaily($span, $obs);
+        $daily = $this->usesDaily($span, $obs, $budget);
         if ((in_array($spec->aggregate, Catalog::DAILY, true) || $historical || $degrees) && !$daily) {
             throw new QueryError('This aggregate needs daily summaries and calendar-day boundaries');
         }
@@ -183,10 +189,10 @@ final class Computation
             if ($saved !== null) {
                 $budget->source('series_chunk');
                 $this->point($span, $saved->raw, $saved->coverage);
-                return $this->index >= count($this->spans);
+                return $this->index >= count($this->spans) && $this->fallbackStep($budget);
             }
         }
-        $shareable = in_array($spec->aggregate, ['sum', 'count', 'avg', 'weighted_avg', 'min', 'max', 'mintime', 'maxtime'], true)
+        $shareable = !$this->reader->hardware && in_array($spec->aggregate, ['sum', 'count', 'avg', 'weighted_avg', 'min', 'max', 'mintime', 'maxtime'], true)
             && !$degrees && !in_array($obs, ['wind', 'windvec', 'windgustvec'], true) && $spec->every !== 'archive';
         $scope = hash('sha256', json_encode([Cache::VERSION, $this->reader->config->id, $obs, $daily], JSON_THROW_ON_ERROR));
         $reused = false;
@@ -207,10 +213,25 @@ final class Computation
         $table = $daily ? $this->reader->dailyTable($obs, $budget) : 'archive';
         $sql = 'SELECT * FROM ' . $table . ' WHERE dateTime > ? AND dateTime ' . ($daily ? '<' : '<=') . ' ? ORDER BY dateTime LIMIT 512';
         $rows = 0;
-        foreach ($reused ? [] : $this->reader->rows($sql, [$cursor, $end], $budget) as $row) {
+        $history = $this->reader->hardware ? new HardwareHistory($this->reader) : null;
+        $input = $history === null ? $this->reader->rows($sql, [$cursor, $end], $budget)
+            : ($daily ? $history->days($obs, $table, $cursor, $end, $budget) : $history->rows($obs, $start, $end, $cursor, $budget));
+        foreach ($reused ? [] : $input as $row) {
             $stamp = $row['dateTime'] ?? null;
             if (!is_int($stamp)) {
                 throw new QueryError('Invalid archive timestamp');
+            }
+            if ($daily && $history !== null) {
+                $resolved = $this->hardwareDay($history, $obs, $table, $stamp, $budget);
+                if ($resolved === null) {
+                    return false;
+                }
+                $row = $resolved;
+                if (($row['_empty'] ?? false) === true) {
+                    ++$rows;
+                    $this->cursor = $stamp;
+                    continue;
+                }
             }
             if (!$daily && ($row['usUnits'] ?? null) !== $this->reader->units->value) {
                 throw new QueryError('Mixed archive units need normalization before aggregation');
@@ -243,7 +264,11 @@ final class Computation
         if ($shareable && $cache !== null && $span->end <= min($this->asOf, $this->reader->last ?? 0)) {
             $cache->storeState($scope, $this->reader->config->id, $span, $this->stats);
         }
-        $value = $this->stats->finish($spec, $daily);
+        $finish = clone $spec;
+        if ($history !== null && !$daily && $finish->aggregate === 'avg' && !in_array($obs, ['windvec', 'windgustvec'], true)) {
+            $finish->aggregate = 'weighted_avg';
+        }
+        $value = $this->stats->finish($finish, $daily);
         if ($spec->aggregate === 'tderiv' && is_float($value)) {
             [$input] = Units::unitOf($this->reader->units, $spec->observation);
             if ($input === 'watt_hour' || $input === 'kilowatt_hour') {
@@ -258,11 +283,97 @@ final class Computation
             $cache->storeChunk($chunkKey, $this->reader->config->id, $span, new Value($value, $this->unit, $this->group, coverage: $coverage));
         }
         $this->point($span, $value, $coverage);
-        return $this->index >= count($this->spans);
+        return $this->index >= count($this->spans) && $this->fallbackStep($budget);
     }
 
-    private function usesDaily(Span $span, string $obs): bool
+    /** A day's replacement statistics are resumable, just like the outer query.
+     * @return array<string, mixed>|null
+     */
+    private function hardwareDay(HardwareHistory $history, string $obs, string $table, int $day, ReadBudget $budget): ?array
     {
+        $original = $this->reader->one("SELECT * FROM $table WHERE dateTime = ?", [$day], $budget);
+        $has = $this->reader->one('SELECT 1 FROM weewx_hardware WHERE field = ? AND day = ? LIMIT 1', [HardwareHistory::field($obs), $day], $budget);
+        if ($has === null) {
+            return $original ?? ['dateTime' => $day];
+        }
+        $end = Intervals::endOfDay($day, $this->reader->config->timezone);
+        $this->dailyStats ??= new Accumulator();
+        $inner = clone $this->spec;
+        if (in_array($inner->observation, ['heatdeg', 'cooldeg', 'growdeg'], true)) {
+            $inner->observation = 'outTemp';
+        }
+        $count = 0;
+        foreach ($history->rows($obs, $day, $end, $this->dailyCursor ?? $day, $budget) as $row) {
+            $this->dailyStats->add($row, false, $inner, null);
+            $this->dailyCursor = Cache::integer($row['dateTime']);
+            ++$count;
+        }
+        if ($count === 512) {
+            return null;
+        }
+        $stats = $this->dailyStats;
+        $row = ['dateTime' => $day, '_empty' => $stats->count === 0.0, 'count' => $stats->count, 'sum' => $stats->sum, 'wsum' => $stats->wsum, 'sumtime' => $stats->weight,
+            'min' => $stats->min, 'max' => $stats->max, 'mintime' => $stats->mintime, 'maxtime' => $stats->maxtime,
+            'xsum' => $stats->x, 'ysum' => $stats->y, 'dirsumtime' => $stats->directionWeight,
+            'wsquaresum' => $stats->square, 'max_dir' => $stats->gustdir];
+        // Existing daily tables retain observed LOOP extremes which the logger averages cannot recover.
+        foreach (['min', 'max'] as $key) {
+            $value = Accumulator::number($original[$key] ?? null);
+            if ($value !== null && ($row[$key] === null || ($key === 'min' ? $value < $row[$key] : $value > $row[$key]))) {
+                $row[$key] = $value;
+                $row[$key . 'time'] = $original[$key . 'time'] ?? null;
+                if ($key === 'max') {
+                    $row['max_dir'] = $original['max_dir'] ?? $row['max_dir'];
+                }
+            }
+        }
+        $this->dailyStats = null;
+        $this->dailyCursor = null;
+        return $row;
+    }
+
+    private function fallbackStep(ReadBudget $budget): bool
+    {
+        if ($this->fallbackDone || !$this->reader->hardware || $this->spec->every === null
+            || $this->spec->every === 'archive' || $this->spec->analysis !== '' || $this->spec->period === 'almanac'
+            || in_array($this->spec->observation, ['heatdeg', 'cooldeg', 'growdeg'], true)
+            || !in_array($this->spec->aggregate, ['avg', 'weighted_avg', 'sum', 'cumulative', 'min', 'max', 'first', 'last'], true)) {
+            return true;
+        }
+        $rows = 0;
+        foreach ((new HardwareHistory($this->reader))->fallback($this->spec->observation, $this->span->start, $this->span->end, $this->fallbackCursor ?? $this->span->start, $budget) as $row) {
+            $start = Cache::integer($row['start']);
+            $end = Cache::integer($row['stop']);
+            $this->fallbackCursor = $end;
+            ++$rows;
+            $fits = false;
+            $missing = false;
+            foreach ($this->points as $point) {
+                $fits = $fits || ($start >= $point['start'] && $end <= $point['end']);
+                $missing = $missing || ($point['start'] < $end && $point['end'] > $start && ($point['value'] === null || ($point['coverage'] ?? 0) < 1));
+            }
+            if (!$fits && $missing) {
+                if (count($this->points) + count($this->fallback) >= 4096) {
+                    throw new QueryError('Too many history intervals; reduce the requested period');
+                }
+                $value = Accumulator::number($row['value']);
+                if (in_array($this->spec->observation, ['windvec', 'windgustvec'], true) && is_string($row['record'])) {
+                    $value = $this->vector(\WeewxPhp\Db\Json::object($row['record']));
+                }
+                $this->fallback[] = ['start' => $start, 'end' => $end, 'value' => $value, 'coverage' => 1.0];
+            }
+        }
+        $this->fallbackDone = $rows < 512;
+        return $this->fallbackDone;
+    }
+
+    private function usesDaily(Span $span, string $obs, ReadBudget $budget): bool
+    {
+        if ($this->reader->hardware && !in_array($this->spec->aggregate, Catalog::DAILY, true)
+            && !str_starts_with($this->spec->aggregate, 'historical_') && !in_array($this->spec->observation, ['heatdeg', 'cooldeg', 'growdeg'], true)
+            && $this->reader->one('SELECT 1 FROM weewx_hardware WHERE field = ? AND stop > ? AND stop <= ? AND start < day LIMIT 1', [HardwareHistory::field($obs), $span->start, $span->end], $budget) !== null) {
+            return false;
+        }
         if ($this->spec->period !== 'between' && in_array($this->spec->reference, ['clock', 'fixed'], true) && $this->asOf < min($span->end, $this->reader->last ?? 0)) {
             return false;
         }
@@ -329,15 +440,19 @@ final class Computation
             $points = $this->points;
             if ($this->spec->aggregate === 'cumulative') {
                 $total = 0.0;
+                $complete = true;
                 foreach ($points as &$point) {
+                    if ($this->reader->hardware && ($point['value'] === null || ($point['coverage'] ?? 0) < 1)) {
+                        $complete = false;
+                    }
                     if (is_int($point['value']) || is_float($point['value'])) {
                         $total += $point['value'];
                     }
-                    $point['value'] = $total;
+                    $point['value'] = $complete ? $total : null;
                 }
                 unset($point);
             }
-            $series = new Series($points, $this->unit, $this->group, $status, $this->asOf, $computedAt, delta: in_array($this->spec->aggregate, ['diff', 'trend'], true));
+            $series = new Series($points, $this->unit, $this->group, $status, $this->asOf, $computedAt, delta: in_array($this->spec->aggregate, ['diff', 'trend'], true), fallback: $this->fallback);
             if ($this->spec->analysis !== '') {
                 $spec = clone $this->spec;
                 $spec->threshold = $this->threshold(false);
@@ -350,7 +465,9 @@ final class Computation
 
     public function save(): string
     {
-        return json_encode(['measuredAt' => $this->measuredAt, 'asOf' => $this->asOf, 'index' => $this->index, 'cursor' => $this->cursor, 'stats' => $this->stats->save(), 'points' => $this->points], JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION);
+        return json_encode(['measuredAt' => $this->measuredAt, 'asOf' => $this->asOf, 'index' => $this->index, 'cursor' => $this->cursor, 'stats' => $this->stats->save(), 'points' => $this->points,
+            'fallback' => $this->fallback, 'fallbackCursor' => $this->fallbackCursor, 'fallbackDone' => $this->fallbackDone,
+            'dailyCursor' => $this->dailyCursor, 'dailyStats' => $this->dailyStats?->save()], JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION);
     }
 
     public static function restore(string $json, Spec $spec, ArchiveReader $reader): self
@@ -365,6 +482,11 @@ final class Computation
         $work->cursor = is_int($state['cursor'] ?? null) ? $state['cursor'] : null;
         $work->stats = Accumulator::restore($state['stats']);
         $work->points = ResultCodec::points($state['points']);
+        $work->fallback = is_array($state['fallback'] ?? null) ? ResultCodec::points($state['fallback']) : [];
+        $work->fallbackCursor = is_int($state['fallbackCursor'] ?? null) ? $state['fallbackCursor'] : null;
+        $work->fallbackDone = ($state['fallbackDone'] ?? false) === true;
+        $work->dailyCursor = is_int($state['dailyCursor'] ?? null) ? $state['dailyCursor'] : null;
+        $work->dailyStats = is_array($state['dailyStats'] ?? null) ? Accumulator::restore($state['dailyStats']) : null;
         return $work;
     }
 }

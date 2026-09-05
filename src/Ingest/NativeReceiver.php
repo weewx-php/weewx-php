@@ -65,14 +65,15 @@ final class NativeReceiver
                 $this->wrote = $this->wrote || $result['status'] === 'stored';
             }
             return self::json([
-                'version' => 1, 'status' => 'ok', 'results' => $results,
+                'version' => $batch['version'], 'status' => 'ok', 'results' => $results,
                 'limits' => [
                     'max_bytes' => NativeParser::MAX_BYTES, 'max_packets' => NativeParser::MAX_PACKETS,
                     'max_fields' => NativeParser::MAX_FIELDS, 'max_age_seconds' => NativeParser::maxAge($config->settings),
                     'future_skew_seconds' => NativeParser::FUTURE_SKEW,
                     'receipt_retention_seconds' => NativeParser::RECEIPT_RETENTION,
                     'max_receipts' => $config->ingest->maxNativeReceipts,
-                    'kinds' => ['loop'],
+                    'versions' => [1, 2, 3],
+                    'kinds' => ['loop', 'archive'],
                 ],
             ]);
         } catch (Rejected $error) {

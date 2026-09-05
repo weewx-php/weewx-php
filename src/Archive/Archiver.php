@@ -101,6 +101,14 @@ final class Archiver
         } finally {
             $revisions->close();
         }
+        if ($archive->getMeta('hardwareHistory') !== '1' && $live->lastBefore(PHP_INT_MAX, PacketKind::Archive, $config->senders) !== null) {
+            [$first] = $live->span();
+            if ($first !== null) {
+                // Upgrade retained v2 input, including intervals previously rejected by the target grid.
+                $live->replay()->mark($config, $first, $now, $config->interval($settings));
+                $archive->setMeta('hardwareHistory', '1');
+            }
+        }
         return $result;
     }
 
@@ -202,16 +210,18 @@ final class Archiver
         $quality = Quality::fromConfig($this->config);
         $accum = new Accum($start, $stop, null, $this->policy);
         $packets = 0;
-        $hardware = null;
+        $hardwareInputs = $this->archive->hardwareRecords($start, $stop);
         foreach ($this->live->packets($start, $stop, null, $senders) as $packet) {
+            if ($packet->kind === PacketKind::Archive && $packet->interval === null) {
+                continue;
+            }
             $record = $this->sound($quality, $packet, $units);
             if ($record === null) {
                 continue;
             }
             if ($packet->kind === PacketKind::Archive) {
-                // The console kept its own record. Several may deliver one;
-                // they are laid over each other in arrival order.
-                $hardware = array_replace($hardware ?? [], $record);
+                $hardwareInputs[] = ['source' => $packet->sender, 'start' => $packet->dateTime - (int) round(($packet->interval ?? 0) * 60),
+                    'stop' => $packet->dateTime, 'record' => $record];
                 continue;
             }
             // Derived per packet, before accumulating: the dew point of an
@@ -219,16 +229,16 @@ final class Archiver
             $accum->addRecord($derived->applyPacket($record, $packet->sender), $this->settings->loopHilo, 1);
             ++$packets;
         }
-        if ($hardware === null && $packets === 0) {
+        $hardware = Hardware::aggregate($start, $stop, $hardwareInputs, $this->policy);
+        if ($hardware === [] && $packets === 0) {
             return null;
         }
 
-        if ($hardware !== null) {
+        if ($hardware !== []) {
             // The console's record wins: computed from readings we never saw.
             // WeeWX derives on it first and fills in from the LOOP packets
             // afterwards, without overwriting anything it carries.
-            $record = $hardware;
-            $record['interval'] ??= $seconds / 60;
+            $record = $hardware + ['dateTime' => $stop, 'usUnits' => $units->value, 'interval' => (float) ($seconds / 60)];
             $record = $derived->applyRecord($record);
             if ($packets > 0) {
                 $record = $accum->augment($record);
@@ -242,7 +252,51 @@ final class Archiver
         if ($quality->dropped() !== []) {
             $this->log->info(sprintf('%s: interval ending %d refused %s', $this->config->id, $stop, $quality->summary()));
         }
-        return new Built($stop, $seconds, $record, $accum, $packets, $hardware !== null, $quality->dropped());
+        return new Built($stop, $seconds, $record, $accum, $packets, $hardware !== [], $quality->dropped());
+    }
+
+    /** Copy hardware input before releasing journal holds, even when no fixed-grid record can be built. */
+    private function preserveHardware(int $start, int $stop): void
+    {
+        foreach ($this->live->packets($start, $stop, PacketKind::Archive, $this->timeline === [] ? $this->config->senders : null) as $packet) {
+            if ($packet->interval === null) {
+                continue;
+            }
+            $worker = $this;
+            if ($this->timeline !== []) {
+                $selected = $this->timeline[0];
+                foreach ($this->timeline as $revision) {
+                    if ($revision['boundary'] < $packet->dateTime) {
+                        $selected = $revision;
+                    }
+                }
+                if (!$selected['config']->enabled) {
+                    continue;
+                }
+                $worker = new self(
+                    $selected['config'],
+                    $selected['settings'],
+                    $this->live,
+                    $this->archive,
+                    new Mapping($selected['config'], Mapping::resolvePrimary($selected['config'], $this->live->senders())),
+                    $selected['config']->policy(),
+                    $this->log,
+                    $this->changes,
+                );
+            }
+            $record = $worker->sound(Quality::fromConfig($worker->config), $packet, $this->archive->unitSystem() ?? $worker->config->unitSystem);
+            if ($record === null) {
+                continue;
+            }
+            $record = Derived::fromConfig($worker->config, $this->archive)->applyRecord($record);
+            $from = $packet->dateTime - (int) round($packet->interval * 60);
+            $this->changes?->before($from, $packet->dateTime);
+            try {
+                $this->archive->preserveHardware($packet->sender, $record);
+            } finally {
+                $this->changes?->after($from, $packet->dateTime);
+            }
+        }
     }
 
     /**
@@ -429,6 +483,7 @@ final class Archiver
                 continue;
             }
             $existing = $this->archive->exists($stop);
+            $this->preserveHardware($stop - $seconds, $stop);
             if ($existing && !$replace) {
                 $this->log->debug(sprintf('%s: interval ending %d is archived already; a late packet is left alone', $this->config->id, $stop));
                 $this->live->clearPending($stop, $this->config->id);
@@ -459,6 +514,7 @@ final class Archiver
             if ($stop + $this->settings->archiveDelay > $now) {
                 break;
             }
+            $this->preserveHardware($job['cursor'], $stop);
             $sod = Intervals::startOfArchiveDay($stop, $this->config->timezone);
             $eod = Intervals::endOfDay($sod, $this->config->timezone);
             $units = $this->archive->unitSystem() ?? $this->config->unitSystem;
@@ -546,6 +602,7 @@ final class Archiver
                 return new Progress($done, false, $stop);
             }
             $existing = $this->archive->exists($stop);
+            $this->preserveHardware($stop - $seconds, $stop);
             if ($existing && !$replace) {
                 $this->live->clearPending($stop, $this->config->id);
                 $stop += $seconds;
@@ -593,6 +650,7 @@ final class Archiver
                 $done += $this->archive->transaction(function () use (&$ts, $last, $seconds, $sod, $zone): int {
                     $builts = [];
                     for (; $ts <= $last && Intervals::startOfArchiveDay($ts, $zone) === $sod; $ts += $seconds) {
+                        $this->preserveHardware($ts - $seconds, $ts);
                         $built = $this->build($ts, $seconds);
                         if ($built === null) {
                             continue;

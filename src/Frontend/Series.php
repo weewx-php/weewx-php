@@ -13,7 +13,9 @@ use Traversable;
 /** @implements IteratorAggregate<int, array{start: int, end: int, value: int|float|bool|string|Vector|null, coverage: float|null}> */
 final class Series implements IteratorAggregate, JsonSerializable
 {
-    /** @param list<array{start: int, end: int, value: int|float|bool|string|Vector|null, coverage: float|null}> $points */
+    /** @param list<array{start: int, end: int, value: int|float|bool|string|Vector|null, coverage: float|null}> $points
+     * @param list<array{start: int, end: int, value: int|float|bool|string|Vector|null, coverage: float|null}> $fallback Whole original hardware spans, not additional bucket values.
+     */
     public function __construct(
         public readonly array $points,
         public readonly ?string $unit = null,
@@ -24,6 +26,7 @@ final class Series implements IteratorAggregate, JsonSerializable
         public readonly ?Output $output = null,
         public readonly string $observation = '',
         public readonly bool $delta = false,
+        public readonly array $fallback = [],
     ) {}
 
     public function to(string $unit): self
@@ -35,12 +38,17 @@ final class Series implements IteratorAggregate, JsonSerializable
             $point['value'] = (new Value($point['value'], $this->unit, $this->group, delta: $this->delta))->to($unit)->raw;
             $points[] = $point;
         }
-        return new self($points, $unit, $this->group, $this->status, $this->asOf, $this->computedAt, $this->output, $this->observation, $this->delta);
+        $fallback = [];
+        foreach ($this->fallback as $point) {
+            $point['value'] = (new Value($point['value'], $this->unit, $this->group))->to($unit)->raw;
+            $fallback[] = $point;
+        }
+        return new self($points, $unit, $this->group, $this->status, $this->asOf, $this->computedAt, $this->output, $this->observation, $this->delta, $fallback);
     }
 
     public function withOutput(Output $output, string $observation = ''): self
     {
-        return new self($this->points, $this->unit, $this->group, $this->status, $this->asOf, $this->computedAt, $output, $observation, $this->delta);
+        return new self($this->points, $this->unit, $this->group, $this->status, $this->asOf, $this->computedAt, $output, $observation, $this->delta, $this->fallback);
     }
 
     /** @return list<array{start: int, end: int, value: string, coverage: float|null}> */
@@ -215,6 +223,7 @@ final class Series implements IteratorAggregate, JsonSerializable
     public function jsonSerialize(): array
     {
         return ['points' => $this->points, 'unit' => $this->unit, 'group' => $this->group,
-            'status' => $this->status, 'asOf' => $this->asOf, 'computedAt' => $this->computedAt, 'delta' => $this->delta];
+            'status' => $this->status, 'asOf' => $this->asOf, 'computedAt' => $this->computedAt, 'delta' => $this->delta]
+            + ($this->fallback === [] ? [] : ['fallback' => $this->fallback, 'fallbackSource' => 'hardware']);
     }
 }

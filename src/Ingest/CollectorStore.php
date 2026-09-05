@@ -29,6 +29,10 @@ final class CollectorStore
             sample TEXT, stored INTEGER NOT NULL DEFAULT 0, duplicates INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (collector, station)
         );
+        CREATE TABLE IF NOT EXISTS weewx_sensor (
+            collector TEXT NOT NULL, station TEXT NOT NULL, source TEXT NOT NULL,
+            PRIMARY KEY (collector, station)
+        );
         CREATE TABLE IF NOT EXISTS weewx_receipt (
             collector TEXT NOT NULL, event TEXT NOT NULL, digest TEXT NOT NULL,
             station TEXT NOT NULL, sender TEXT NOT NULL, received INTEGER NOT NULL,
@@ -87,13 +91,13 @@ final class CollectorStore
     /** @return array<string, mixed>|null */
     public function sender(string $sender): ?array
     {
-        return $this->db->one('SELECT * FROM weewx_station WHERE sender = ?', [$sender]);
+        return $this->db->one('SELECT s.*, r.source FROM weewx_station s LEFT JOIN weewx_sensor r USING (collector, station) WHERE sender = ?', [$sender]);
     }
 
     /** @return list<array<string, mixed>> */
     public function senders(): array
     {
-        return iterator_to_array($this->db->query('SELECT * FROM weewx_station ORDER BY first_seen, sender'), false);
+        return iterator_to_array($this->db->query('SELECT s.*, r.source FROM weewx_station s LEFT JOIN weewx_sensor r USING (collector, station) ORDER BY first_seen, sender'), false);
     }
 
     public function setState(string $sender, string $state, ?string $name = null): void
@@ -138,7 +142,7 @@ final class CollectorStore
     public function stations(string $collector): array
     {
         NativeParser::uuid($collector);
-        return iterator_to_array($this->db->query('SELECT * FROM weewx_station WHERE collector = ? ORDER BY first_seen, station', [$collector]), false);
+        return iterator_to_array($this->db->query('SELECT s.*, r.source FROM weewx_station s LEFT JOIN weewx_sensor r USING (collector, station) WHERE s.collector = ? ORDER BY first_seen, station', [$collector]), false);
     }
 
     public function adopt(string $collector, string $station, ?string $name = null): void
@@ -261,6 +265,8 @@ final class CollectorStore
                     $sender,
                     'weewx',
                     $collector . '/' . $event->station,
+                    kind: $event->kind,
+                    interval: $event->interval,
                     received: $now,
                 );
                 $stored = $this->live->add(
@@ -307,12 +313,19 @@ final class CollectorStore
             $sender = 'weewx_' . substr(hash('sha256', $collector . '/' . $event->station), 0, 24);
             $this->db->exec(
                 'INSERT INTO weewx_station (collector, station, sender, name, driver_module, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)',
-                [$collector, $event->station, $sender, $sender, $event->module, $now, $now],
+                [$collector, $event->station, $sender, $event->source === null ? $sender : SensorSource::label($event->source), $event->module, $now, $now],
             );
             $row = $this->db->one('SELECT * FROM weewx_station WHERE collector = ? AND station = ?', [$collector, $event->station]);
         }
         if ($row === null) {
             throw new Rejected('station_unavailable', 503);
+        }
+        $source = $this->db->one('SELECT source FROM weewx_sensor WHERE collector = ? AND station = ?', [$collector, $event->station]);
+        if ($source !== null && ($event->source === null || Sqlite::text($source['source']) !== Packet::canonical($event->source))) {
+            throw new Rejected('sensor_identity_mismatch', 403);
+        }
+        if ($event->source !== null && $source === null) {
+            $this->db->exec('INSERT INTO weewx_sensor VALUES (?, ?, ?)', [$collector, $event->station, Packet::canonical($event->source)]);
         }
         $sample = Packet::canonical($event->data);
         $this->db->exec(

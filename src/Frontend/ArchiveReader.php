@@ -27,6 +27,7 @@ final class ArchiveReader implements History
     public readonly ?int $last;
     public readonly UnitSystem $units;
     public readonly int $dailyThrough;
+    public readonly bool $hardware;
     /** @var array<string, true> */
     private array $checkedDaily = [];
 
@@ -54,7 +55,12 @@ final class ArchiveReader implements History
         }
         $daily = [];
         $hasMetadata = false;
-        foreach ($this->rows("SELECT name FROM sqlite_master WHERE type = 'table' AND name GLOB 'archive_day_*'", [], $budget) as $row) {
+        $hardware = false;
+        foreach ($this->rows("SELECT name FROM sqlite_master WHERE type = 'table' AND (name GLOB 'archive_day_*' OR name = 'weewx_hardware')", [], $budget) as $row) {
+            if ($row['name'] === 'weewx_hardware') {
+                $hardware = true;
+                continue;
+            }
             if ($row['name'] === 'archive_day__metadata') {
                 $hasMetadata = true;
             }
@@ -63,8 +69,20 @@ final class ArchiveReader implements History
             }
         }
         $this->daily = $daily;
+        $this->hardware = $hardware;
         $first = $this->one('SELECT dateTime, usUnits FROM archive ORDER BY dateTime ASC LIMIT 1', [], $budget);
         $last = $this->one('SELECT dateTime FROM archive ORDER BY dateTime DESC LIMIT 1', [], $budget);
+        $archiveLast = is_int($last['dateTime'] ?? null) ? $last['dateTime'] : 0;
+        if ($hardware) {
+            $hwFirst = $this->one('SELECT stop AS dateTime, usUnits FROM weewx_hardware ORDER BY stop LIMIT 1', [], $budget);
+            $hwLast = $this->one('SELECT stop AS dateTime FROM weewx_hardware ORDER BY stop DESC LIMIT 1', [], $budget);
+            if ($hwFirst !== null && ($first === null || $hwFirst['dateTime'] < $first['dateTime'])) {
+                $first = $hwFirst;
+            }
+            if ($hwLast !== null && ($last === null || $hwLast['dateTime'] > $last['dateTime'])) {
+                $last = $hwLast;
+            }
+        }
         $this->first = isset($first['dateTime']) && is_int($first['dateTime']) ? $first['dateTime'] : null;
         $this->last = isset($last['dateTime']) && is_int($last['dateTime']) ? $last['dateTime'] : null;
         $unit = $first['usUnits'] ?? null;
@@ -77,7 +95,8 @@ final class ArchiveReader implements History
                 }
             }
         }
-        $this->dailyThrough = ($metadata['Version'] ?? null) === '4.0' && ctype_digit($metadata['lastUpdate'] ?? '') ? (int) $metadata['lastUpdate'] : 0;
+        $through = ($metadata['Version'] ?? null) === '4.0' && ctype_digit($metadata['lastUpdate'] ?? '') ? (int) $metadata['lastUpdate'] : 0;
+        $this->dailyThrough = $hardware && $through >= $archiveLast ? max($through, $this->last ?? 0) : $through;
     }
 
     public function close(): void

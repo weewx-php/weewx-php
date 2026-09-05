@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {pairs, cumulative, dailyRain, temperatureHumidity} from '../public/assets/chart-recipes.js';
+import {pairs, cumulative, dailyRain, temperatureHumidity, hardwareIntervals, rainAccumulation} from '../public/assets/chart-recipes.js';
 
 test('ECharts gets milliseconds, unrounded numbers and real nulls', () => {
     assert.deepEqual(pairs({points: [{end: 10, value: 1.2345}, {end: 20, value: null}, {end: 30, value: 0}]}),
@@ -20,4 +20,20 @@ test('daily labels refer to interval start in station timezone across DST', () =
     assert.deepEqual(option.xAxis.data, ['29.03.']);
     assert.deepEqual(option.series[0].data, [0]);
     assert.equal(temperatureHumidity({}, 'Europe/Berlin').series[0].connectNulls, false);
+});
+
+test('coarse logger data retains both boundaries and never fills cumulative minute gaps', () => {
+    const series = {unit: 'mm', points: [{start: 0, end: 60, value: null, coverage: 0}],
+        fallback: [{start: 0, end: 300, value: 2, coverage: 1}]};
+    const option = hardwareIntervals(series, 'UTC');
+    assert.deepEqual(option.data, [[0, 300000, 2]]);
+    assert.deepEqual(pairs(series), [[60000, null]]);
+    assert.deepEqual(cumulative(series), [[60000, null]]);
+    const rain = rainAccumulation(series, 'UTC');
+    assert.equal(rain.series[1].yAxisIndex, 1);
+    assert.deepEqual(rain.series[1].data, [[0, 300000, 2]]);
+    const rendered = option.renderItem({coordSys: {x: 0, width: 400000}}, {
+        value: index => option.data[0][index], coord: value => value, visual: () => '#000',
+    });
+    assert.equal(rendered.children[0].shape.x2, 300000);
 });

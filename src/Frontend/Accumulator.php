@@ -138,11 +138,12 @@ final class Accumulator
             $gustdir = self::number($row['windGustDir'] ?? null);
             $this->square += ($value ?? 0) ** 2 * $weight;
             if ($vector && $value !== null && ($value === 0.0 || $direction !== null)) {
-                ++$this->vectorCount;
+                $this->vectorCount += ($row['_durationWeighted'] ?? false) === true ? $weight : 1;
             }
             if ($direction !== null && $value !== null) {
-                $this->x += $value * ($vector ? 1 : $weight) * cos(deg2rad(90 - $direction));
-                $this->y += $value * ($vector ? 1 : $weight) * sin(deg2rad(90 - $direction));
+                $this->directionWeight += $weight;
+                $this->x += $value * ($vector && ($row['_durationWeighted'] ?? false) !== true ? 1 : $weight) * cos(deg2rad(90 - $direction));
+                $this->y += $value * ($vector && ($row['_durationWeighted'] ?? false) !== true ? 1 : $weight) * sin(deg2rad(90 - $direction));
             }
             if ($value !== null && ($this->min === null || $value < $this->min)) {
                 $this->mindir = $direction;

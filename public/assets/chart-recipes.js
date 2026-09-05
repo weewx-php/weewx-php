@@ -25,6 +25,27 @@ function base(zone) {
         legend: {top: 0}};
 }
 
+/** Original logger spans are a separate layer, never minute samples or cumulative additions. */
+export function hardwareIntervals(series, zone, name = 'Logger', yAxisIndex = 0) {
+    return {id: `hardware-${name}`, name, type: 'custom', yAxisIndex,
+        dimensions: ['start', 'end', 'value'], encode: {x: [0, 1], y: 2},
+        data: (series?.fallback || []).filter(p => typeof p.value === 'number')
+            .map(p => [p.start * 1000, p.end * 1000, p.value]),
+        tooltip: {trigger: 'item', renderMode: 'richText', formatter: p =>
+            `${name}\n${timeFormat(zone, true)(p.value[0])} – ${timeFormat(zone, true)(p.value[1])}\n${p.value[2]} ${series?.unit || ''}`},
+        renderItem: (params, api) => {
+            const start = api.coord([api.value(0), api.value(2)]), end = api.coord([api.value(1), api.value(2)]);
+            const left = Math.max(start[0], params.coordSys.x), right = Math.min(end[0], params.coordSys.x + params.coordSys.width);
+            if (left > right) return;
+            const style = {stroke: api.visual('color'), lineWidth: 3};
+            return {type: 'group', children: [
+                {type: 'line', shape: {x1: left, y1: start[1], x2: right, y2: end[1]}, style: {...style, lineDash: [5, 3]}},
+                {type: 'line', shape: {x1: left, y1: start[1] - 4, x2: left, y2: start[1] + 4}, style},
+                {type: 'line', shape: {x1: right, y1: end[1] - 4, x2: right, y2: end[1] + 4}, style},
+            ]};
+        }};
+}
+
 export function temperatureHumidity(data, zone) {
     return {...base(zone),
         dataset: [
@@ -35,6 +56,8 @@ export function temperatureHumidity(data, zone) {
         series: [
             {id: 'temperature', name: 'Temperatur', type: 'line', datasetId: 'temperature', encode: {x: 'time', y: 'temperature'}, showSymbol: false, connectNulls: false},
             {id: 'humidity', name: 'Luftfeuchte', type: 'line', datasetId: 'humidity', encode: {x: 'time', y: 'humidity'}, yAxisIndex: 1, showSymbol: false, connectNulls: false},
+            hardwareIntervals(data.temperature24h, zone, 'Temperatur · Logger'),
+            hardwareIntervals(data.humidity24h, zone, 'Luftfeuchte · Logger', 1),
         ]};
 }
 
@@ -46,9 +69,9 @@ export function dailyRain(series, zone) {
 }
 
 export function rainAccumulation(series, zone) {
-    return {...base(zone), yAxis: {type: 'value', name: 'mm', min: 0},
+    return {...base(zone), yAxis: [{type: 'value', name: 'mm kumuliert', min: 0}, {type: 'value', name: 'mm / Loggerintervall', min: 0}],
         series: [{id: 'cumulative', name: 'Kumuliert', type: 'line', step: 'end', showSymbol: false,
-            connectNulls: false, data: cumulative(series)}]};
+            connectNulls: false, data: cumulative(series)}, hardwareIntervals(series, zone, 'Loggerintervall', 1)]};
 }
 
 export function monthlyComparison(report, zone) {

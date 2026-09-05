@@ -21,6 +21,7 @@ use WeewxPhp\Tick\Runtime;
 use WeewxPhp\Tick\Tick;
 use WeewxPhp\Time\FixedClock;
 use WeewxPhp\Weewx\Intervals;
+use WeewxPhp\Weewx\ScalarStats;
 use WeewxPhp\Weewx\UnitSystem;
 
 final class NativeReplayTest extends TestCase
@@ -89,9 +90,9 @@ final class NativeReplayTest extends TestCase
     /** @param list<array<string, mixed>> $events
      * @return list<array<string, mixed>>
      */
-    private function receive(array $events): array
+    private function receive(array $events, int $version = 1): array
     {
-        $body = json_encode(['version' => 1, 'collector_id' => $this->credentials['id'], 'packets' => $events], JSON_THROW_ON_ERROR);
+        $body = json_encode(['version' => $version, 'collector_id' => $this->credentials['id'], 'packets' => $events], JSON_THROW_ON_ERROR);
         $response = (new NativeReceiver($this->runtime))->handle('POST', '', static fn(): string => $body, '192.0.2.1', true, 'application/json', 'Bearer ' . $this->credentials['token']);
         self::assertSame(200, $response->status, $response->body);
         $results = Json::object($response->body)['results'];
@@ -123,6 +124,36 @@ final class NativeReplayTest extends TestCase
             $archive->processDue($this->clock->now(), Budget::unlimited($this->clock));
         } finally {
             $archive->close();
+        }
+    }
+
+    public function testLateHardwareReplacesSoftwareAndFillsLoggerOnlyGapOnce(): void
+    {
+        $start = Intervals::startOfDay(self::NOW - 86400, $this->runtime->config->settings->timezone);
+        $this->receive([$this->event(1, $start + 30, ['rain' => 0.2, 'outTemp' => 10])]);
+        $archiver = $this->archiver($this->runtime);
+        try {
+            $archiver->processReplay(self::NOW, Budget::unlimited($this->clock));
+            $hardware = [
+                array_replace($this->event(2, $start + 300, ['rain' => 0.5, 'outTemp' => 12]), ['kind' => 'archive', 'interval' => 5]),
+                array_replace($this->event(3, $start + 600, ['rain' => 0.7, 'outTemp' => 14]), ['kind' => 'archive', 'interval' => 5]),
+            ];
+            self::assertSame(['stored', 'stored'], array_column($this->receive($hardware, 2), 'status'));
+            $this->clock->advance(16);
+            $archiver->processReplay($this->clock->now(), Budget::unlimited($this->clock));
+            self::assertSame(['duplicate', 'duplicate'], array_column($this->receive($hardware, 2), 'status'));
+            self::assertFalse($this->runtime->live()->replay()->pending());
+            self::assertSame(2, $archiver->archive()->count());
+            $day = $archiver->archive()->loadDay($start, UnitSystem::METRICWX);
+            $rain = $day->get('rain');
+            $temperature = $day->get('outTemp');
+            self::assertInstanceOf(ScalarStats::class, $rain);
+            self::assertInstanceOf(ScalarStats::class, $temperature);
+            self::assertEqualsWithDelta(1.2, $rain->sum, 0.000001);
+            self::assertSame(10.0, $temperature->min);
+            self::assertSame(14.0, $temperature->max);
+        } finally {
+            $archiver->close();
         }
     }
 

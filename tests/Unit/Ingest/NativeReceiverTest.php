@@ -59,9 +59,9 @@ final class NativeReceiverTest extends TestCase
     }
 
     /** @param list<array<string, mixed>> $packets */
-    private function body(array $packets): string
+    private function body(array $packets, int $version = 1): string
     {
-        return json_encode(['version' => 1, 'collector_id' => $this->credentials['id'], 'packets' => $packets], JSON_THROW_ON_ERROR);
+        return json_encode(['version' => $version, 'collector_id' => $this->credentials['id'], 'packets' => $packets], JSON_THROW_ON_ERROR);
     }
 
     private function send(string $body, ?string $token = null): Response
@@ -114,6 +114,46 @@ final class NativeReceiverTest extends TestCase
         self::assertSame(['duplicate', 'duplicate'], array_column($this->results($this->send($body)), 'status'));
         self::assertSame(2, $this->runtime->live()->count());
         self::assertFalse($this->receiver->wrote());
+    }
+
+    public function testHardwareContractPreservesIntervalAndReceiptsAcrossVersions(): void
+    {
+        $loop = $this->packet();
+        $hardware = array_replace($this->packet(2), ['kind' => 'archive', 'interval' => 5]);
+        $body = $this->body([$loop, $hardware], 2);
+        self::assertSame(['pending', 'pending'], array_column($this->results($this->send($body)), 'status'));
+        $this->store()->adopt($this->credentials['id'], self::STATION);
+        // A LOOP accepted through v1 remains the same event inside a mixed v2 batch.
+        self::assertSame('stored', $this->results($this->send($this->body([$loop])))[0]['status']);
+        $response = $this->send($body);
+        self::assertSame(2, Json::object($response->body)['version']);
+        self::assertSame(['duplicate', 'stored'], array_column($this->results($response), 'status'));
+        $packets = iterator_to_array($this->runtime->live()->packets(self::NOW - 20, self::NOW));
+        self::assertCount(2, $packets);
+        self::assertSame('archive', $packets[1]->kind->value);
+        self::assertSame(5.0, $packets[1]->interval);
+        self::assertSame(17, $packets[1]->unitSystem->value);
+        self::assertSame(0.2, $packets[1]->data['rain']);
+        self::assertSame(['duplicate', 'duplicate'], array_column($this->results($this->send($body)), 'status'));
+        $hardware['interval'] = 10;
+        self::assertSame('event_conflict', $this->results($this->send($this->body([$hardware], 2)))[0]['reason']);
+    }
+
+    public function testHardwareMetadataIsStrictBeforeDiscovery(): void
+    {
+        $hardware = array_replace($this->packet(), ['kind' => 'archive', 'interval' => 5]);
+        foreach ([null, true, '5', 0, -1, 1441, 1.001, [], INF] as $interval) {
+            $body = $interval === INF
+                ? str_replace('"interval":5', '"interval":1e999', $this->body([$hardware], 2))
+                : $this->body([array_replace($hardware, ['interval' => $interval])], 2);
+            self::assertSame(400, $this->send($body)->status, $body);
+        }
+        unset($hardware['interval']);
+        self::assertSame(400, $this->send($this->body([$hardware], 2))->status);
+        self::assertSame(400, $this->send($this->body([$hardware]))->status);
+        self::assertSame(400, $this->send($this->body([array_replace($this->packet(), ['interval' => 5])], 2))->status);
+        self::assertSame([], $this->store()->stations($this->credentials['id']));
+        self::assertSame(0, $this->runtime->live()->count());
     }
 
     public function testAuthenticationAndTransportAreCheckedBeforeReadingBody(): void
@@ -278,5 +318,68 @@ final class NativeReceiverTest extends TestCase
         self::assertSame(503, $this->send($this->body([$this->packet(2)]))->status);
         self::assertSame('duplicate', $this->results($this->send($this->body([$this->packet()])))[0]['status']);
         self::assertSame(1, $this->runtime->live()->count());
+    }
+
+    public function testRadioSensorsUseIndependentAdoption(): void
+    {
+        $source = ['type' => 'rtl_433', 'receiver_id' => self::STATION, 'model' => 'Radio / "sensor"', 'sensor_id' => '42', 'channel' => '1'];
+        $first = $this->packet();
+        $first['source'] = $source;
+        $first['driver_module'] = 'weewx_php_ingest.sdr';
+        $first['station_id'] = \WeewxPhp\Ingest\SensorSource::stationId($source);
+        $second = $first;
+        $second['source']['channel'] = '2';
+        $second['station_id'] = \WeewxPhp\Ingest\SensorSource::stationId($second['source']);
+        $second['event_id'] = $this->packet(2)['event_id'];
+        $body = $this->body([$first, $second], 3);
+        self::assertSame(['pending', 'pending'], array_column($this->results($this->send($body)), 'status'));
+        self::assertSame(0, $this->runtime->live()->count());
+        $rows = $this->store()->stations($this->credentials['id']);
+        self::assertCount(2, $rows);
+        self::assertStringContainsString('Radio / "sensor" 42 /', Sqlite::text($rows[0]['name']));
+        self::assertSame('rtl_433', Json::object(Sqlite::text($rows[0]['source']))['type']);
+        $this->store()->adopt($this->credentials['id'], $first['station_id']);
+        self::assertSame(['stored', 'pending'], array_column($this->results($this->send($body)), 'status'));
+        $this->store()->adopt($this->credentials['id'], $second['station_id']);
+        self::assertSame(['duplicate', 'stored'], array_column($this->results($this->send($body)), 'status'));
+        self::assertSame(2, $this->runtime->live()->count());
+        $response = Json::object($this->send($body)->body);
+        self::assertSame(3, $response['version']);
+        self::assertIsArray($response['limits']);
+        self::assertSame([1, 2, 3], $response['limits']['versions']);
+        $this->store()->block($this->credentials['id'], $first['station_id']);
+        $first['event_id'] = $this->packet(3)['event_id'];
+        $second['event_id'] = $this->packet(4)['event_id'];
+        $second['dateTime'] = self::NOW - 9;
+        self::assertSame(['rejected', 'stored'], array_column($this->results($this->send($this->body([$first, $second], 3))), 'status'));
+    }
+
+    public function testRadioIdentityValidationAndSourceRequired(): void
+    {
+        $packet = $this->packet();
+        $packet['driver_module'] = 'weewx_php_ingest.sdr';
+        $packet['source'] = ['type' => 'rtl_433', 'receiver_id' => self::STATION, 'model' => 'Sensor', 'sensor_id' => '42', 'channel' => ''];
+        $packet['station_id'] = \WeewxPhp\Ingest\SensorSource::stationId($packet['source']);
+        foreach (['sensor_id' => 42, 'channel' => null, 'model' => "Bad\n", 'receiver_id' => '../bad', 'extra' => 'x'] as $key => $value) {
+            $bad = $packet;
+            $bad['source'][$key] = $value;
+            self::assertSame(400, $this->send($this->body([$bad], 3))->status);
+        }
+        $bad = $packet;
+        $bad['source']['channel'] = 'changed';
+        self::assertSame(400, $this->send($this->body([$bad], 3))->status);
+        self::assertSame(400, $this->send($this->body([$packet], 2))->status);
+        unset($packet['source']);
+        self::assertSame(400, $this->send($this->body([$packet], 3))->status);
+        self::assertCount(0, $this->store()->stations($this->credentials['id']));
+    }
+
+    public function testV3AlsoCarriesOrdinaryLoopAndHardwarePackets(): void
+    {
+        $loop = $this->packet();
+        $archive = $this->packet(2);
+        $archive['kind'] = 'archive';
+        $archive['interval'] = 5;
+        self::assertCount(2, NativeParser::parse($this->body([$loop, $archive], 3))['events']);
     }
 }

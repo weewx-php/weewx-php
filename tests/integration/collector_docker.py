@@ -293,21 +293,20 @@ def scenario():
         raise AssertionError('Timed out: ' + description)
 
     provisioned = read_json(FIXTURE / 'provisioned.json')
-    config = WORK / 'collector.toml'
-    config.write_text('[collector]\n' + f'id = "{provisioned["collector_id"]}"\n'
-        'endpoint = "https://receiver:8443/ingest/weewx.php"\n'
-        'token_file = "/fixture/collector.token"\nca_file = "/fixture/ca.pem"\n'
-        f'state_dir = "{WORK}/state"\nsend_interval = 1\ntimeout = 3\nbackoff_max = 4\n'
-        'shutdown_timeout = 5\n')
+    config = WORK / 'weewx.conf'
+    config.write_text('[Ingest]\n' + f'collector_id = {provisioned["collector_id"]}\n'
+        'url = https://receiver:8443/ingest/weewx.php\n'
+        'token_file = /fixture/collector.token\nca_file = /fixture/ca.pem\n'
+        f'state_dir = {WORK}/state\nsend_interval = 1\ntimeout = 3\nbackoff_max = 4\n'
+        'shutdown_timeout = 5\n[Stations]\n')
     for key, interval in [('a', 0.4), ('b', 0.7)]:
-        station = WORK / f'{key}.conf'
-        station.write_text('[Station]\nstation_type = Simulator\nlatitude = 0\nlongitude = 0\n'
-            'altitude = 0, meter\n[Simulator]\ndriver = weewx.drivers.simulator\n'
-            f'mode = simulator\nloop_interval = {interval}\n'
-            'observations = outTemp, outHumidity, rain, windSpeed, windDir, windGust, windGustDir\n')
         with config.open('a') as stream:
-            stream.write(f'[stations.{key}]\nconfig = "{station}"\n'
-                'startup_timeout = 15\nsilence_timeout = 10\n'
+            stream.write(f'[[{key}]]\n[[[Station]]]\nstation_type = Simulator\n'
+                'latitude = 0\nlongitude = 0\naltitude = 0, meter\n'
+                '[[[Simulator]]]\ndriver = weewx.drivers.simulator\n'
+                f'mode = simulator\nloop_interval = {interval}\n'
+                'observations = outTemp, outHumidity, rain, windSpeed, windDir, windGust, windGustDir\n'
+                '[[[Ingest]]]\nstartup_timeout = 15\nsilence_timeout = 10\n'
                 'lifecycle_interval = 10\nlifecycle_delay = 1\n')
     base = [sys.executable, '-m', 'weewx_php_ingest', '--config', str(config)]
 

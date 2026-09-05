@@ -61,7 +61,16 @@ final class ResultCodec
         $asOf = is_int($data['asOf'] ?? null) ? $data['asOf'] : null;
         $computedAt = is_int($data['computedAt'] ?? null) ? $data['computedAt'] : null;
         if (is_array($data['points'] ?? null)) {
-            return new Series(self::points($data['points']), $unit, $group, $status, $asOf, $computedAt, delta: ($data['delta'] ?? false) === true);
+            return new Series(
+                self::points($data['points']),
+                $unit,
+                $group,
+                $status,
+                $asOf,
+                $computedAt,
+                delta: ($data['delta'] ?? false) === true,
+                fallback: is_array($data['fallback'] ?? null) ? self::points($data['fallback']) : [],
+            );
         }
         $value = self::raw($data['value'] ?? null);
         return new Value($value, $unit, $group, $status, $asOf, $computedAt, Accumulator::number($data['coverage'] ?? null), $timezone, delta: ($data['delta'] ?? false) === true);

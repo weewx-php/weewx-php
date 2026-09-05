@@ -29,9 +29,9 @@ const stop = subscribe(document.body.dataset.api, (feed, error) => {
     table.replaceChildren();
     for (const [name, series] of Object.entries(data)) {
         if (series.type !== 'series') continue;
-        for (const point of series.points) {
+        for (const point of [...series.points, ...(series.fallback || []).map(p => ({...p, hardware: true}))]) {
             const row = document.createElement('tr');
-            for (const value of [name, timeFormat(zone, true)(point.start * 1000), timeFormat(zone, true)(point.end * 1000),
+            for (const value of [name + (point.hardware ? ' · Logger' : ''), timeFormat(zone, true)(point.start * 1000), timeFormat(zone, true)(point.end * 1000),
                 point.value === null ? '—' : new Intl.NumberFormat('de-DE', {maximumFractionDigits: 2}).format(point.value),
                 series.unit || '', point.coverage === null ? '—' : `${Math.round(point.coverage * 100)} %`]) {
                 const cell = document.createElement('td'); cell.textContent = value; row.append(cell);

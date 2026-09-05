@@ -1,6 +1,6 @@
 FROM weewx-php-conformance
 USER root
-RUN pip install --no-cache-dir "pytest>=8" "cryptography>=46"
+RUN pip install --no-cache-dir "pytest>=8" "cryptography>=46" "requests>=2.32.5" "python-dateutil>=2.9"
 RUN mkdir /fixture && chown 1001:1001 /fixture
 USER runner
 ENTRYPOINT ["python"]

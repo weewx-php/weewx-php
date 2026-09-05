@@ -201,6 +201,96 @@ final class ArchiverTest extends TestCase
         self::assertNotNull($built->record['dewpoint']);
     }
 
+    public function testHardwareRainReplacesLoopRainAndKeepsLoopExtremes(): void
+    {
+        $this->add(self::T0 + 10, ['rain' => 0.2, 'outTemp' => 10.0]);
+        $this->add(self::T0 + 20, ['rain' => 0.3, 'outTemp' => 30.0]);
+        $this->add(self::T0 + 300, ['rain' => 0.6, 'outTemp' => 19.0], kind: PacketKind::Archive, interval: 5.0);
+        $archiver = $this->archiver();
+        $built = $archiver->build(self::T0 + 300);
+        self::assertNotNull($built);
+        self::assertSame(0.6, $built->record['rain']);
+        self::assertSame(19.0, $built->record['outTemp']);
+        $archiver->store($built);
+        $day = $archiver->archive()->loadDay(self::T0 - 39000, UnitSystem::METRICWX);
+        $rain = $day->get('rain');
+        $temperature = $day->get('outTemp');
+        self::assertInstanceOf(ScalarStats::class, $rain);
+        self::assertInstanceOf(ScalarStats::class, $temperature);
+        self::assertSame(0.6, $rain->sum);
+        self::assertSame(30.0, $temperature->max);
+    }
+
+    public function testHardwareSpansAreNeverSplitOrOverlaidOnDifferentIntervals(): void
+    {
+        $this->add(self::T0 + 60, ['rain' => 99.0], kind: PacketKind::Archive, interval: 1.0);
+        $this->add(self::T0 + 299, ['rain' => 99.0], kind: PacketKind::Archive, interval: 5.0);
+        $this->add(self::T0 + 300, ['rain' => 99.0], kind: PacketKind::Archive, interval: 10.0);
+        $archiver = $this->archiver();
+        self::assertNull($archiver->build(self::T0 + 300));
+        $this->add(self::T0 + 20, ['rain' => 0.2]);
+        $built = $archiver->build(self::T0 + 300);
+        self::assertNotNull($built);
+        self::assertFalse($built->fromHardware);
+        self::assertSame(0.2, $built->record['rain']);
+        self::assertSame(self::T0 + 300, $built->record['dateTime']);
+        self::assertSame(5, $built->record['interval']);
+        // The original history remains available in the live journal.
+        self::assertCount(3, iterator_to_array($this->live->packets(self::T0, self::T0 + 300, PacketKind::Archive)));
+    }
+
+    public function testHardwareKeepsStationSelectionAndConvertsOriginalUnits(): void
+    {
+        $this->add(self::T0 + 20, ['rain' => 0.2, 'outTemp' => 10]);
+        $this->live->add(new Packet(
+            self::T0 + 300,
+            UnitSystem::US,
+            ['rain' => 0.1, 'outTemp' => 68],
+            'ecowitt',
+            kind: PacketKind::Archive,
+            interval: 5,
+        ), ['kirchdorf'], 300);
+        // A second station must not overwrite the primary's outdoor readings.
+        $this->add(self::T0 + 300, ['rain' => 99, 'outTemp' => 99], 'other', PacketKind::Archive, 5);
+        $archiver = $this->archiver(Archives::config(database: $this->dir . '/kirchdorf.sdb', primary: 'ecowitt', senders: null));
+        $built = $archiver->build(self::T0 + 300);
+        self::assertNotNull($built);
+        self::assertEqualsWithDelta(2.54, $built->record['rain'], 0.000001);
+        self::assertSame(20.0, $built->record['outTemp']);
+        self::assertSame(17, $built->record['usUnits']);
+    }
+
+    public function testHardwareTilesLargerArchiveByFieldWithCorrectWeightAndGust(): void
+    {
+        $this->add(self::T0 + 30, ['rain' => 99, 'outTemp' => 99, 'outHumidity' => 50]);
+        $this->add(self::T0 + 300, ['rain' => 1, 'outTemp' => 10, 'windSpeed' => 2, 'windDir' => 350, 'windGust' => 9, 'windGustDir' => 80], kind: PacketKind::Archive, interval: 5);
+        $this->add(self::T0 + 900, ['rain' => 2, 'outTemp' => 25, 'windSpeed' => 2, 'windDir' => 10, 'windGust' => 8, 'windGustDir' => 180], kind: PacketKind::Archive, interval: 10);
+        $built = $this->archiver()->build(self::T0 + 900, 900);
+        self::assertNotNull($built);
+        self::assertSame(3.0, $built->record['rain']);
+        self::assertSame(20.0, $built->record['outTemp']);
+        self::assertSame(50.0, $built->record['outHumidity']);
+        self::assertSame(9.0, $built->record['windGust']);
+        self::assertSame(80, $built->record['windGustDir']);
+        self::assertLessThan(10, $built->record['windDir']);
+        self::assertSame(15.0, $built->record['interval']);
+    }
+
+    public function testCoarseHardwareIsPreservedBeforeLiveInputIsPruned(): void
+    {
+        $this->add(self::T0 + 600, ['rain' => 2, 'outTemp' => 20], kind: PacketKind::Archive, interval: 10);
+        $archiver = $this->archiver();
+        $archiver->processReplay(self::T0 + 3616, Budget::unlimited($this->clock));
+        $archiver->processDue(self::T0 + 3616, Budget::unlimited($this->clock));
+        self::assertSame(0, $archiver->archive()->count());
+        self::assertCount(1, $archiver->archive()->hardwareRecords(self::T0, self::T0 + 600));
+        $this->live->prune(self::T0 + 10 * 86400);
+        self::assertSame(0, $this->live->count());
+        $built = $archiver->build(self::T0 + 600, 600);
+        self::assertNotNull($built);
+        self::assertSame(2, $built->record['rain']);
+    }
+
     public function testAForeignDatabaseIsRefusedUntilTheMappingSaysHow(): void
     {
         $path = $this->dir . '/foreign.sdb';

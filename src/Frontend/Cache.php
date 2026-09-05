@@ -12,7 +12,7 @@ use WeewxPhp\Db\Sqlite;
 final class Cache
 {
     private readonly Sqlite $db;
-    public const VERSION = 'frontend-2';
+    public const VERSION = 'frontend-3';
     public const MAX_REQUESTS = 1000;
 
     public function __construct(Settings $settings)

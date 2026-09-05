@@ -78,7 +78,7 @@ final class Feed
                 }
             }
             if ($result instanceof Series) {
-                $points += count($result->points);
+                $points += count($result->points) + count($result->fallback);
             } elseif ($result instanceof Report) {
                 $points += count($result->periods->points);
             }
