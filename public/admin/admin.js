@@ -1,0 +1,120 @@
+"use strict";
+// Native forms remain the authoritative submission path.
+const dirty = new Set();
+document.documentElement.classList.add("js");
+function syncColumns() {
+  document.querySelectorAll("select[data-column-target]").forEach(select => {
+    const row = select.closest("tr").nextElementSibling;
+    if (!row || !row.classList.contains("column-draft")) return;
+    const open = select.value === "__new__";
+    row.classList.toggle("is-open", open);
+    row.querySelectorAll("input,select").forEach(input => { input.disabled = !open; });
+  });
+}
+syncColumns();
+document.addEventListener("change", syncColumns);
+document.querySelectorAll("form[data-edit-form]").forEach(form => {
+  form.addEventListener("change", () => { dirty.add(form); });
+  form.addEventListener("input", () => { dirty.add(form); });
+  form.addEventListener("reset", () => { dirty.delete(form); setTimeout(syncColumns, 0); });
+  form.addEventListener("submit", () => { dirty.delete(form); });
+});
+window.addEventListener("beforeunload", event => {
+  if (dirty.size) {
+    event.preventDefault();
+    event.returnValue = "";
+  }
+});
+
+const historyRequests = new Map();
+async function syncHistory(select) {
+  const box = select.closest("td").querySelector("[data-column-history]");
+  if (!box || box.dataset.column === select.value) return;
+  const column = select.value;
+  box.dataset.column = column;
+  box.replaceChildren();
+  if (!column || column === "-" || column === "__new__") return;
+  box.textContent = document.body.dataset.historyLoading;
+  const archive = select.form.querySelector('input[name="archive"]').value;
+  const url = new URL(location.href);
+  url.search = new URLSearchParams({page: "fields", archive, column, format: "column", lang: document.documentElement.lang});
+  try {
+    if (!historyRequests.has(url.href)) {
+      historyRequests.set(url.href, fetch(url, {credentials: "same-origin"}).then(response => {
+        if (!response.ok) throw new Error("history unavailable");
+        return response.json();
+      }));
+    }
+    const data = await historyRequests.get(url.href);
+    if (box.dataset.column !== column) return;
+    box.replaceChildren();
+    const warning = data.occupied && column !== select.dataset.originalValue;
+    const contents = warning ? document.createElement("div") : box;
+    if (warning) {
+      contents.className = "existing-data-warning";
+      contents.setAttribute("role", "status");
+      const title = document.createElement("strong");
+      title.className = "warning-title";
+      title.textContent = data.warning;
+      contents.append(title);
+      box.append(contents);
+    }
+    const summary = document.createElement("strong");
+    summary.className = "history-count";
+    summary.textContent = data.summary;
+    contents.append(summary);
+    const list = document.createElement("dl");
+    data.items.forEach(item => {
+      const label = document.createElement("dt"), value = document.createElement("dd");
+      label.textContent = item.label;
+      value.textContent = item.value;
+      list.append(label, value);
+    });
+    contents.append(list);
+    if (data.sourceSummary) {
+      const source = document.createElement("span");
+      source.className = "history-source";
+      source.textContent = data.sourceSummary;
+      contents.append(source);
+    }
+    if (data.sources.length) {
+      const details = document.createElement("details"), title = document.createElement("summary"), sources = document.createElement("ul");
+      title.textContent = data.historyLabel;
+      data.sources.forEach(text => {
+        const item = document.createElement("li");
+        item.textContent = text;
+        sources.append(item);
+      });
+      details.append(title, sources);
+      contents.append(details);
+    }
+    if (warning) {
+      const label = document.createElement("label"), confirm = document.createElement("input");
+      label.className = "check history-confirmation";
+      confirm.type = "checkbox";
+      confirm.name = select.dataset.confirmationName;
+      confirm.value = column;
+      confirm.required = true;
+      label.append(confirm, document.createTextNode(data.confirmation));
+      contents.append(label);
+    }
+  } catch (_) {
+    historyRequests.delete(url.href);
+    if (box.dataset.column === column) box.textContent = document.body.dataset.historyError;
+  }
+}
+document.addEventListener("change", event => {
+  if (event.target.matches("select[data-column-target]")) syncHistory(event.target);
+});
+document.addEventListener("reset", () => setTimeout(() => {
+  document.querySelectorAll("select[data-column-target]").forEach(syncHistory);
+}, 0));
+
+const lastKinds = new Set((document.body.dataset.lastKinds || "").split(","));
+document.addEventListener("change", event => {
+  if (!event.target.matches('.column-draft select[name$="[kind]"]')) return;
+  const aggregation = event.target.closest(".column-draft").querySelector('select[name$="[aggregation]"]');
+  const last = lastKinds.has(event.target.value);
+  Array.from(aggregation.options).forEach(option => { option.disabled = last && option.value !== "last"; });
+  if (last) aggregation.value = "last";
+});

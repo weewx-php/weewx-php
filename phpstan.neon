@@ -1,0 +1,16 @@
+# Static analysis at the strictest level. The strict rules come in through
+# phpstan/extension-installer, so no path into vendor/ is needed here; in the
+# test image vendor/ is not beside this file.
+parameters:
+    level: max
+    phpVersion: 80100
+    paths:
+        - src
+        - frontend.php
+        - public
+        - themes
+        - bin/weewx-php
+        - tests/Unit
+    tmpDir: /tmp/phpstan
+    checkMissingCallableSignature: true
+    treatPhpDocTypesAsCertain: false

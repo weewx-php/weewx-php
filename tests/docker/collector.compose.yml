@@ -1,0 +1,58 @@
+# Two isolated application containers. Only the test control/setup volume is shared.
+# No published ports; neither application can reach the internet at runtime.
+name: weewx-collector-e2e
+
+x-test: &test
+  image: weewx-collector-e2e
+  build:
+    context: ../..
+    dockerfile: tests/docker/Dockerfile.collector
+  user: "1001:1001"
+  read_only: true
+  tmpfs:
+    - /tmp:uid=1001,gid=1001,mode=0700
+  environment:
+    PYTHONPATH: /collector/src
+    PYTHONDONTWRITEBYTECODE: "1"
+    PYTHONUNBUFFERED: "1"
+    TZ: UTC
+    WEEWX_PHP_ROOT: /repo
+  networks: [test]
+
+services:
+  receiver:
+    <<: *test
+    command: ["/repo/tests/integration/collector_docker.py", "receiver"]
+    volumes:
+      - ../..:/repo:ro
+      - fixture:/fixture
+    healthcheck:
+      test: ["CMD", "python", "-c", "from pathlib import Path; assert Path('/fixture/ready').exists()"]
+      interval: 1s
+      timeout: 2s
+      retries: 30
+
+  collector:
+    <<: *test
+    command: ["/repo/tests/integration/collector_docker.py", "scenario"]
+    volumes:
+      - ../..:/repo:ro
+      - ../../../weewx-php-ingest:/collector:ro
+      - fixture:/fixture
+    depends_on:
+      receiver:
+        condition: service_healthy
+
+  unit:
+    <<: *test
+    command: ["-m", "pytest", "-q", "-p", "no:cacheprovider", "/collector/tests"]
+    volumes:
+      - ../..:/repo:ro
+      - ../../../weewx-php-ingest:/collector:ro
+
+networks:
+  test:
+    internal: true
+
+volumes:
+  fixture:

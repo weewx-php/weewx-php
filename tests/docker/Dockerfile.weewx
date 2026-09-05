@@ -1,0 +1,29 @@
+# The conformance image: WeeWX itself, pyephem, and a PHP to run our code.
+# The checks in tests/conformance run the PHP side through its CLI and hand
+# the result to WeeWX in the same container, so a comparison is one command
+# and never depends on two containers agreeing about a shared file.
+FROM python:3.13-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    TZ=Europe/Berlin
+
+# The day tables are keyed on local midnight. Read in another zone, a
+# comparison pairs one day with another.
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        php-cli \
+        php-sqlite3 \
+        tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pinned, both of them. A comparison against a moving target tells you the
+# target moved, on a morning when you were changing something else.
+RUN pip install --no-cache-dir "weewx==5.5.0" "ephem==4.2"
+
+# Not root, for the same reason as in Dockerfile.php.
+RUN useradd --system --uid 1001 --create-home runner
+USER runner
+WORKDIR /repo
+ENTRYPOINT ["python", "tests/conformance/run.py"]

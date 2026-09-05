@@ -1,0 +1,145 @@
+# weewx-php.conf: the whole installation in one file, in the shape of
+# weewx.conf. A section is a name in brackets, a section inside it has one
+# bracket more, a list is separated by commas, and anything after # is a
+# comment. Copy this file to weewx-php.conf beside it and change what
+# applies. docs/configuration.md describes every option.
+
+data_dir = data                   # where the databases, the log and the lock live; relative to this file
+timezone = Europe/Berlin          # the zone a day is counted in, unless an archive names its own
+archive_interval = 5m             # how long one archive record is, for every archive
+archive_delay = 15                # seconds an interval waits after it ends, for a packet that is merely slow
+loop_hilo = true                  # whether the packets sharpen a day's highs and lows
+late_packets = ignore             # or rebuild: build an archived interval again when a packet arrives late
+live_retention = 7d               # how long packets stay in the journal
+raw_retention = 1h                # how long the raw upload stays beside a packet
+time_budget = 20                  # seconds one tick may spend building records
+max_intervals_per_run = 100       # intervals one archive may build in one tick
+journal_mode = wal                # or delete, on a network file system
+tick_token = "change-me"          # what a call of tick.php has to carry; without one, every call is refused
+log_level = info                  # debug, info, warning or error
+
+# HTTP push reception. Run `ingest endpoints`, point the console here, then
+# `ingest list` and `ingest adopt <sender>`. No station needs creating first.
+[Ingest]
+    enabled = false
+    public_url = https://weather.example.org
+    http_ecowitt = true           # allow port-80 uploads from HTTP-only consoles
+    http_wunderground = true      # false once every WU sender uses HTTPS
+    requests_per_minute = 300     # per source IP; global limit is ten times this
+    sender_requests_per_minute = 120 # per authenticated sender, across source IPs
+    tick_mode = auto              # auto: after FastCGI response only; external: scheduled tick only
+    max_pending = 100
+    max_native_receipts = 2000000 # native event receipts; size for 30 days of all stations
+    metric_wind = kph             # Observer metric dialect only: kph or mps
+    # trusted_proxies = 127.0.0.1 # exact IPs; proxy must overwrite forwarding headers
+
+# Every sender, under the id it writes into its packets. Only the id is
+# needed; the rest serves the status and the watch on the sender's silence.
+[Stations]
+    [[ecowitt_kirchdorf]]
+        name = "HP2561AE Pro Kirchdorf"
+        expected_interval = 16    # seconds between two packets, for judging silence
+        stale_after = 3           # intervals of silence until the station counts as stale
+        down_after = 20           # and until it counts as down
+    [[dwd_freising]]
+        name = "DWD Freising"
+        expected_interval = 1h
+
+# Every WeeWX database, under an id of its own. Everything about a series
+# hangs here: the place, the senders it reads, and how their readings are
+# placed, checked and completed.
+[Archives]
+    [[kirchdorf]]
+        name = "Kirchdorf an der Amper"
+        location = "Kirchdorf an der Amper"
+        latitude = 48.4596
+        longitude = 11.6539
+        altitude = 440, meter     # or foot
+        database = archives/kirchdorf.sdb   # relative to data_dir
+        unit_system = METRICWX    # US, METRIC or METRICWX; only for a database made here
+        primary = ecowitt_kirchdorf         # the sender whose readings go to the columns of their names
+        senders = ecowitt_kirchdorf, dwd_freising   # the senders read, or * for every one
+        auto_mapping = false      # write a database this application did not create by name
+        [[[members]]]
+            [[[[dwd_freising]]]]
+                indoor = false    # its inTemp, inHumidity and inDewpoint stay out
+        [[[columns]]]             # columns added to the database, with their SQL type
+            extraTemp9 = REAL
+            lightning_num = INTEGER
+        [[[fields]]]              # per sender: reading = column, or - to drop it
+            [[[[ecowitt_kirchdorf]]]]
+                inTemp = -
+            [[[[dwd_freising]]]]
+                outTemp = extraTemp1
+                outHumidity = extraHumid1
+        [[[extractors]]]          # how a reading is taken into a record where not the average
+            lightning_num = last
+        [[[calculate]]]           # per derived reading: prefer_hardware, hardware or software
+            dewpoint = prefer_hardware
+            ET = prefer_hardware
+        [[[qc]]]                  # per reading: minimum, maximum and, if not the archive's, the unit
+            unit_system = METRIC  # the system limits without a unit are written in
+            outTemp = -40, 60, degree_C
+            outHumidity = 0, 100
+        [[[calibrate]]]           # per sender: offset and, if not 1, scale, in the archive's units
+            [[[[ecowitt_kirchdorf]]]]
+                outTemp = -0.4, 1.0
+
+# Every service the readings go to, under a name of your own. `kind` says
+# which service; the account details are the service's. With more than one
+# archive, `archive` says whose readings. docs/configuration.md lists every
+# key of every kind.
+[Uploads]
+    [[wu]]
+        kind = wunderground
+        station = IBAYERN123      # the station ID, not the account's email
+        password = "station-key"  # the station key from the member settings
+        indoor = false            # inTemp and inHumidity go too
+        trigger = record          # record | interval | manual
+        catch_up = 12             # missed records one run may send; 0 means only the newest
+        timeout = 10              # seconds one request may take
+    [[pws]]
+        kind = pwsweather
+        station = MYSTATION
+        password = "..."
+    [[wow]]
+        kind = wow
+        station = 123456          # the site ID
+        password = "654321"       # the six-digit authentication key
+    [[windy]]
+        kind = windy
+        api_key = "..."
+        station = 0               # which of the key's stations, counted from zero
+    [[weathercloud]]
+        kind = weathercloud
+        wid = "..."               # the device ID
+        key = "..."               # the device key beside it
+    [[cwop]]
+        kind = cwop
+        station = DW1234          # the CWOP id, or a licensed callsign
+        passcode = -1             # -1 for a DW or EW station; a callsign has a real one
+        every = 10m               # CWOP asks for one report every five to ten minutes
+        servers = cwop.aprs.net:14580, cwop.aprs.net:23
+    [[broker]]
+        kind = mqtt
+        host = mqtt.example.org
+        port = 1883               # empty means 1883, or 8883 with tls
+        username = ""
+        password = ""
+        tls = false
+        topic = weather           # readings go to weather/outTemp_C and the record to weather/loop
+        unit_system = ""          # US, METRIC or METRICWX; empty publishes what the archive holds
+        retain = true             # a browser gets the current conditions the moment it subscribes
+        home_assistant = false    # announce the readings so the station appears by itself
+        trigger = live            # the newest packet every tick
+    [[influx]]
+        kind = influx
+        url = http://influxdb:8086
+        api = v2                  # v2 | v1
+        bucket = weewx
+        org = home
+        token = "..."             # a token that may write the bucket
+        measurement = weather
+        location = kirchdorf      # the tag every point carries; one per archive
+        unit_system = METRICWX    # what a Grafana axis shows; pick it once
+        catch_up = 5000

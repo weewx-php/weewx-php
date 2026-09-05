@@ -1,0 +1,15 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/*
+ * The command line of the application. `weewx-php help` lists what it does.
+ */
+
+use WeewxPhp\Cli\Application;
+use WeewxPhp\Cli\Console;
+
+require dirname(__DIR__) . '/src/autoload.php';
+
+exit((new Application(new Console()))->run(array_slice($argv, 1)));

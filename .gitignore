@@ -1,0 +1,25 @@
+# Editor and assistant working files. Not part of the software.
+.claude/
+.idea/
+.vscode/
+
+# Composer. The application runs without it; only the dev tools need it.
+/vendor/
+composer.phar
+
+# Tool caches.
+/.phpunit.cache/
+/.php-cs-fixer.cache
+/.phpstan/
+
+# What a running installation produces: its configuration, its databases,
+# its logs and its lock file. Per installation, never shared.
+/data/
+/weewx-php.conf
+*.sdb
+*.sdb-shm
+*.sdb-wal
+
+# Reference material: a real database with somebody's measurements, and the
+# sibling packages kept beside it for reading.
+/reference/

@@ -1,0 +1,16 @@
+{
+  "theme": "demo",
+  "schema_version": 1,
+  "fields": [
+    {
+      "key": "default_range",
+      "type": "select",
+      "label": "settings.default_range",
+      "default": "24h",
+      "options": {
+        "24h": "range.day",
+        "7d": "range.week"
+      }
+    }
+  ]
+}

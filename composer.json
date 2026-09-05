@@ -1,0 +1,38 @@
+{
+    "name": "hilman2/weewx-php",
+    "description": "WeeWX archives on any web host with PHP: a live packet journal, an archiver per place, one tick.php.",
+    "type": "project",
+    "license": "GPL-3.0-or-later",
+    "require": {
+        "php": ">=8.1",
+        "ext-json": "*",
+        "ext-sqlite3": "*"
+    },
+    "require-dev": {
+        "friendsofphp/php-cs-fixer": "^3.75",
+        "phpstan/extension-installer": "^1.4",
+        "phpstan/phpstan": "^2.1",
+        "phpstan/phpstan-strict-rules": "^2.0",
+        "phpunit/php-invoker": "^4.0",
+        "phpunit/phpunit": "^10.5"
+    },
+    "autoload": {
+        "psr-4": {
+            "WeewxPhp\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "WeewxPhp\\Tests\\": "tests/Unit/"
+        }
+    },
+    "config": {
+        "allow-plugins": {
+            "phpstan/extension-installer": true
+        },
+        "platform": {
+            "php": "8.1.0"
+        },
+        "sort-packages": true
+    }
+}

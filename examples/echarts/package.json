@@ -1,0 +1,6 @@
+{
+  "name": "weewx-php-echarts-example",
+  "private": true,
+  "description": "Dependency inventory for the pinned browser distribution in public/assets/vendor/echarts",
+  "dependencies": {"echarts": "6.1.0"}
+}

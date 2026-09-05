@@ -1,0 +1,6 @@
+FROM weewx-php-conformance
+USER root
+RUN pip install --no-cache-dir "pytest>=8" "cryptography>=46"
+RUN mkdir /fixture && chown 1001:1001 /fixture
+USER runner
+ENTRYPOINT ["python"]

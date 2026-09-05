@@ -1,0 +1,78 @@
+# Every test of this repository runs in here. The repository is mounted
+# read-only; anything a test writes goes to /tmp, which is a tmpfs. No
+# network at run time: a test that quietly reaches the internet is a test
+# that fails on a train.
+#
+#   docker compose -f tests/docker/compose.yml run --rm lint
+#   docker compose -f tests/docker/compose.yml run --rm unit
+#   docker compose -f tests/docker/compose.yml run --rm unit-live
+#   docker compose -f tests/docker/compose.yml run --rm conformance
+#
+# tests/run.sh runs lint, unit and conformance in that order.
+
+# Named, so that a compose project in some other repository's `docker`
+# directory is not taken for this one.
+name: weewx-php
+
+x-php: &php
+  build:
+    context: ../..
+    dockerfile: tests/docker/Dockerfile.php
+  image: weewx-php-tests
+  volumes:
+    - ../..:/repo:ro
+  tmpfs:
+    - /tmp
+  working_dir: /repo
+  network_mode: none
+  environment:
+    TZ: Europe/Berlin
+    WEEWX_PHP_TMP: /tmp
+
+services:
+  unit:
+    <<: *php
+    command: ["/opt/build/vendor/bin/phpunit", "--configuration", "phpunit.xml"]
+
+  # The same run, one line per test as it happens, for watching where a slow
+  # or hanging run is.
+  unit-live:
+    <<: *php
+    command: ["/opt/build/vendor/bin/phpunit", "--configuration", "phpunit.xml", "--testdox", "--display-warnings"]
+
+  lint:
+    <<: *php
+    command:
+      - sh
+      - -c
+      - >-
+        /opt/build/vendor/bin/php-cs-fixer fix --dry-run --diff --config=.php-cs-fixer.dist.php
+        && /opt/build/vendor/bin/phpstan analyse --configuration=phpstan.neon --no-progress --memory-limit=512M
+
+  # The one service that may write into the repository: it applies what
+  # `lint` only reports. Run it on purpose, never as part of a test.
+  fix:
+    <<: *php
+    volumes:
+      - ../..:/repo
+    command: ["/opt/build/vendor/bin/php-cs-fixer", "fix", "--config=.php-cs-fixer.dist.php"]
+
+  conformance:
+    build:
+      context: ../..
+      dockerfile: tests/docker/Dockerfile.weewx
+    image: weewx-php-conformance
+    volumes:
+      - ../..:/repo:ro
+      # weewx-evo's sources, when they are around: the uploads check compares
+      # Windy, Weathercloud, InfluxDB and MQTT with its modules. Point
+      # WEEWX_EVO_SRC at its src directory; tests/run.sh does so when the
+      # repository sits beside this one. Without it the repository is mounted
+      # there instead, holds no weewx_evo package, and that half is skipped.
+      - ${WEEWX_EVO_SRC:-../..}:/evo:ro
+    tmpfs:
+      - /tmp
+    working_dir: /repo
+    network_mode: none
+    environment:
+      TZ: Europe/Berlin

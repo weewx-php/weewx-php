@@ -1,0 +1,9 @@
+Options -Indexes -MultiViews
+
+# No blanket HTTP -> HTTPS redirect: some consoles can only upload over HTTP.
+# Host/admin TLS policy belongs to the hosting configuration.
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^[A-Za-z0-9]{12}/ecowitt/?$ receive.php [END]
+    RewriteRule ^weatherstation/updateweatherstation(?:\.asp)?/?$ receive.php [END]
+</IfModule>
