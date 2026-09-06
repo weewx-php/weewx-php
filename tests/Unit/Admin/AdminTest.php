@@ -359,6 +359,25 @@ final class AdminTest extends TestCase
         }
     }
 
+    public function testOnlyLoginRequestsCurrentPasswordAutofill(): void
+    {
+        $view = new Page(new ReadModel($this->path), new Translator(), 'csrf');
+        self::assertStringContainsString('autocomplete="current-password"', $view->login(true, ''));
+        foreach ([\WeewxPhp\Upload\Kind::Wunderground, \WeewxPhp\Upload\Kind::Influx] as $kind) {
+            $html = $view->render('settings', ['kind' => $kind->value]);
+            $dom = new DOMDocument();
+            @$dom->loadHTML($html);
+            $passwords = (new DOMXPath($dom))->query('//input[@type="password"]');
+            self::assertNotFalse($passwords);
+            self::assertGreaterThan(0, $passwords->length);
+            foreach ($passwords as $password) {
+                self::assertInstanceOf(\DOMElement::class, $password);
+                self::assertSame('new-password', $password->getAttribute('autocomplete'), $kind->value);
+                self::assertSame('', $password->getAttribute('value'));
+            }
+        }
+    }
+
     public function testBackupRequestReportsQueuedAndKeepsLanguage(): void
     {
         $auth = new Auth(Config::load($this->path)->settings);

@@ -56,11 +56,11 @@ final class Page
         return $out;
     }
 
-    private function input(string $name, string $label, string $default = '', string $type = 'text', bool $required = false): string
+    private function input(string $name, string $label, string $default = '', string $type = 'text', bool $required = false, string $autocomplete = 'new-password'): string
     {
         $value = $type === 'password' ? '' : $this->value($name, $default);
         return '<label class="control"><span>' . $this->t($label) . '</span><input name="' . self::escape($name) . '" type="' . self::escape($type)
-            . '" value="' . self::escape($value) . '"' . ($required ? ' required' : '') . ($type === 'password' ? ' autocomplete="current-password"' : '') . '></label>';
+            . '" value="' . self::escape($value) . '"' . ($required ? ' required' : '') . ($type === 'password' ? ' autocomplete="' . self::escape($autocomplete) . '"' : '') . '></label>';
     }
 
     /** @param array<string, string> $options Labels are plain text. */
@@ -157,7 +157,7 @@ final class Page
         if (!$configured) {
             $body .= '<p>' . $this->t('status.setup') . '</p><code>php bin/weewx-php admin password-stdin</code>';
         } else {
-            $body .= $this->form('login') . $this->input('password', 'label.password', type: 'password', required: true) . $this->button('action.login') . '</form>';
+            $body .= $this->form('login') . $this->input('password', 'label.password', type: 'password', required: true, autocomplete: 'current-password') . $this->button('action.login') . '</form>';
         }
         return $this->shell('overview', $body . '</section>', false);
     }

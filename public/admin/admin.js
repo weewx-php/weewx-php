@@ -1,6 +1,7 @@
 "use strict";
 // Native forms remain the authoritative submission path.
 const dirty = new Set();
+const initialValues = new Map();
 document.documentElement.classList.add("js");
 document.querySelectorAll(".station-table, .archive-table").forEach(table => {
   const headings = [...table.querySelectorAll("thead th")].map(cell => cell.textContent);
@@ -21,9 +22,18 @@ function announce(message, kind = "info", persistent = false) {
   if (!persistent) feedbackTimer = setTimeout(() => feedback.classList.remove("is-visible"), 6000);
 }
 function updateDirty(form) {
+  if (form.hasAttribute("data-unsaved-draft") || formValues(form) !== initialValues.get(form)) dirty.add(form);
+  else dirty.delete(form);
   const status = form.querySelector("[data-form-status]");
   if (status) status.textContent = dirty.has(form) ? document.body.dataset.unsaved : labels.unchanged;
   form.classList.toggle("is-dirty", dirty.has(form));
+}
+function formValues(form) {
+  return JSON.stringify([...form.elements]
+    .filter(input => input.name && !input.disabled && !["hidden", "submit", "reset", "button"].includes(input.type))
+    .map(input => [input.name, input.value,
+      ["checkbox", "radio"].includes(input.type) ? input.checked : null,
+      input.type === "select-multiple" ? [...input.selectedOptions].map(option => option.value) : null]));
 }
 function beginNavigation(message) {
   document.body.classList.add("is-navigating");
@@ -56,9 +66,11 @@ function syncColumns() {
 syncColumns();
 document.addEventListener("change", syncColumns);
 document.querySelectorAll("form[data-edit-form]").forEach(form => {
+  if (!form.querySelector('input:not([type="hidden"]), select, textarea')) return;
   const actions = form.querySelector(".form-actions");
-  if (form.hasAttribute("data-unsaved-draft") && form.querySelector('input:not([type="hidden"]), select, textarea')) dirty.add(form);
-  if (actions && form.querySelector('input:not([type="hidden"]), select, textarea')) {
+  initialValues.set(form, formValues(form));
+  if (form.hasAttribute("data-unsaved-draft")) dirty.add(form);
+  if (actions) {
     const status = document.createElement("span");
     status.dataset.formStatus = "";
     status.className = "form-status";
@@ -66,13 +78,12 @@ document.querySelectorAll("form[data-edit-form]").forEach(form => {
     actions.append(status);
     updateDirty(form);
   }
-  form.addEventListener("change", () => { dirty.add(form); updateDirty(form); });
-  form.addEventListener("input", () => { dirty.add(form); updateDirty(form); });
+  form.addEventListener("change", () => { syncColumns(); updateDirty(form); });
+  form.addEventListener("input", () => updateDirty(form));
   form.addEventListener("reset", () => {
-    if (!form.hasAttribute("data-unsaved-draft")) dirty.delete(form);
-    updateDirty(form);
     announce(labels.reset);
-    setTimeout(syncColumns, 0);
+    // The reset event runs before the browser restores the field values.
+    setTimeout(() => { syncColumns(); updateDirty(form); }, 0);
   });
 });
 document.addEventListener("submit", event => {
@@ -129,6 +140,7 @@ if (serverNotice) {
 }
 window.addEventListener("pageshow", restoreInteraction);
 window.addEventListener("beforeunload", event => {
+  initialValues.forEach((_, form) => updateDirty(form));
   if ([...dirty].some(form => !pendingForms.has(form))) {
     event.preventDefault();
     event.returnValue = "";

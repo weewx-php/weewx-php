@@ -50,7 +50,7 @@ services:
       - ../..:/repo:ro
     working_dir: /repo
     network_mode: none
-    command: ["node", "--test", "tests/chart-recipes.test.mjs", "tests/feed-client.test.mjs"]
+    command: ["node", "--test", "tests/chart-recipes.test.mjs", "tests/feed-client.test.mjs", "tests/admin.test.mjs"]
 
   unit:
     <<: *php
