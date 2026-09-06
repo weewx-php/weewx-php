@@ -1,18 +1,18 @@
-# Cookbook-Beispiele
+# Cookbook examples
 
-Vollständige Anleitung: [Theme-Cookbook](../../docs/theme-cookbook.md).
+Complete guide: [Theme cookbook](../../docs/theme-cookbook.md).
 
-`data.php` definiert den vorbereiteten Bedarf. `feeds.php` veröffentlicht
-ausdrücklich die drei öffentlichen Beispiel-Feeds `sidebar`, `live` und `charts`.
-Einbindung erfolgt über eine lokale `public-feeds.php` neben der Stationskonfiguration.
-Die Seite `public/cookbook.php` zeigt vier Apache-ECharts-Diagramme, eine
-Datentabelle und zwei unabhängig einbettbare Widgets.
+`data.php` defines the data to prepare. `feeds.php` explicitly publishes the
+three public example feeds `sidebar`, `live` and `charts`. Include it through
+a local `public-feeds.php` beside the station configuration.
+The `public/cookbook.php` page shows four Apache ECharts charts, a data table
+and two independently embeddable widgets.
 
 ```sh
 php bin/weewx-php --config station.conf analytics sync cookbook themes/cookbook/data.php
 php bin/weewx-php --config station.conf analytics run
 ```
 
-Bei einem großen Erstaufbau weitere Workerläufe zulassen. Die Seite startet
-keine Berechnungen. Live-Werte verlangen einen vorhandenen LOOP-Eingang;
-historische Vergleiche ausreichend vollständige Vorjahre.
+Allow additional worker runs for a large initial build. The page does not start
+calculations. Live values require an existing LOOP input; historical comparisons
+require sufficiently complete previous years.

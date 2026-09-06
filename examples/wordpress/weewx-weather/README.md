@@ -1,43 +1,43 @@
 # WeeWX PHP Weather
 
-Den Inhalt der erzeugten ZIP-Datei als Plugin installieren und aktivieren.
-Benötigt WordPress ab 5.8, PHP ab 7.4 und einen Browser mit ES-Modulen,
-Custom Elements und Shadow DOM.
+Install and activate the contents of the generated ZIP file as a plugin.
+Requires WordPress 5.8+, PHP 7.4+ and a browser with ES modules,
+Custom Elements and Shadow DOM.
 
-## Sidebar und Beiträge
+## Sidebars and posts
 
-Im Widget-Editor einen **Shortcode-Block** einsetzen:
+Add a **Shortcode block** in the widget editor:
 
 ```text
-[weewx_weather api="https://wetter.example.org/api/v1.php?feed=live" fields="temperature,humidity,wind" title="Wetter am Haus"]
+[weewx_weather api="https://wetter.example.org/api/v1.php?feed=live" fields="temperature,humidity,wind" title="Weather at home"]
 ```
 
-Für klassische Sidebars steht auch **WeeWX Wetter** mit denselben drei
-Einstellungen zur Verfügung. Leere Felderauswahl zeigt alle Einzelwerte des Feeds.
-Mehrere Widgets teilen sich bei identischer API-URL eine Abfrage.
+Classic sidebars also offer the **WeeWX Wetter** widget with the same three
+settings. An empty field selection displays all individual values in the feed.
+Multiple widgets share one request when their API URLs match.
 
-`feed=live` zeigt ausschließlich LOOP-Messungen. `feed=sidebar` im Cookbook
-zeigt die letzte vorbereitete Archivmessung. Fehlt ein Live-Journal, erscheint
-„Keine Daten“. Es gibt keinen stillen Rückfall auf Archivwerte.
+`feed=live` displays LOOP observations only. The cookbook's `feed=sidebar`
+displays the latest prepared archive observation. If no live journal exists,
+the widget displays a no-data message. It never silently falls back to archive values.
 
-## Einrichtung
+## Setup
 
-1. Den Feed auf dem Wetterserver veröffentlichen; siehe `docs/theme-cookbook.md`.
-2. Die WordPress-Origin dort exakt freigeben, z. B. `https://blog.example.org`,
-   oder den Feed ausdrücklich mit `origins: ['*']` öffentlich einbetten lassen.
-3. Die vollständige HTTPS-API-URL in Widget oder Shortcode eintragen.
+1. Publish the feed on the weather server; see `docs/theme-cookbook.md`.
+2. Allow the exact WordPress origin there, for example `https://blog.example.org`,
+   or explicitly allow public embedding with `origins: ['*']`.
+3. Enter the complete HTTPS API URL in the widget or shortcode.
 
-Der Browser lädt die Wetterdaten direkt. Es gibt keinen WordPress-Cronjob,
-kein Server-Proxy und keinen API-Schlüssel im HTML. Seiten-Caches dürfen das
-Widget-HTML speichern; die Messwerte aktualisieren sich unabhängig davon.
-Ein CSP-Plugin muss die Wetter-Origin unter `connect-src` erlauben. JavaScript
-und CSS liegen lokal im Plugin; keine ECharts-Abhängigkeit für das Widget.
+The browser loads weather data directly. There is no WordPress cron job,
+server proxy or API key in the HTML. Page caches may store the widget HTML;
+observations update independently. A CSP plugin must allow the weather origin
+in `connect-src`. JavaScript and CSS are local to the plugin; the widget has
+no ECharts dependency.
 
-Fehler erhalten die letzten angezeigten Daten und ergänzen „Verbindung
-unterbrochen“. Zeitstempel und Status bleiben sichtbar. Unsichtbare Tabs
-pausieren, Fehler verzögern Wiederholungen; normale Abfragen folgen `pollSeconds`.
+On errors, the last displayed data remain visible with a connection-lost message.
+Timestamps and status remain visible. Hidden tabs pause polling; errors delay
+retries, and normal requests follow `pollSeconds`.
 
-## Gestaltung
+## Styling
 
 ```css
 weewx-weather {
@@ -48,8 +48,8 @@ weewx-weather {
 }
 ```
 
-## Paket erstellen
+## Building the package
 
-Im Projektverzeichnis `python examples/wordpress/package.py` ausführen.
-Das Skript übernimmt die gemeinsamen Widget-Assets unverändert und erzeugt
-`data/artifacts/weewx-weather.zip`. Keine Node- oder Composer-Installation nötig.
+Run `python examples/wordpress/package.py` in the project directory.
+The script copies the shared widget assets unchanged and creates
+`data/artifacts/weewx-weather.zip`. No Node or Composer installation is needed.

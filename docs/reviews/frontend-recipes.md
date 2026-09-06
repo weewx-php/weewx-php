@@ -1,72 +1,70 @@
-# Frontend-Erweiterungen: Prüfung
+# Frontend extensions review
 
-Stand: 5. September 2026. Implementierung zu
-[Community-Anforderungen](../frontend-community-research.md) und den sechs
-vereinbarten Verbesserungen. Verwendung: [Frontend-Rezepte](../frontend-recipes.md).
+Date: September 5, 2026. Implementation of the
+[community requirements](../frontend-community-research.md) and six agreed
+improvements. Usage: [Frontend recipes](../frontend-recipes.md).
 
-## Umgesetzter Umfang
+## Implemented scope
 
-| Bereich | Ergebnis |
+| Area | Result |
 |---|---|
-| Zentrale Ausgabe | Theme-spezifisches Ausgabeprofil, Einheitengruppen und eigene Messgrößen, sichere Platzhalter, skalare und serielle Umrechnung einschließlich Temperaturdifferenzen |
-| Zeitbezug | Archiv, Uhrzeit oder fester Zeitpunkt; Kalenderdaten gegenüber festen Dauern; gleiche Wahl für Astronomie |
-| Theme-Verwaltung | Atomarer Abgleich, gemeinsamer Besitz, Freigabe exklusiver Registrierungen, CLI-Preflight und Vorbereitung |
-| Vorbereitete Analysen | Monatsstände, qualifizierte Ranglisten, Trockenperioden, Ereignisse und genaue Quantile von Intervallaggregaten; mit Ausschlussgründen und Vergleichsjahren |
-| Gemeinsame Berechnung | Exakte zusammenführbare Zustände für sichere skalare Aggregate; getrennte Rohdaten-/Tagesgewichtung; korrigierbare geschlossene Blöcke |
-| Betrieb | Cache-only-Instanzen, Priorität und Alterung, fortsetzbarer Worker, Abfrage- und Workerdiagnose |
-| Community-Ergänzungen | Messwertkatalog und Verfügbarkeit, semantische Serienstandards, gemeinsames Raster und Jahresüberlagerung, explizites Live-Journal und fester JSON-Datensatz |
+| Central output | Theme-specific output profile, unit groups and custom observations, safe placeholders, scalar and series conversion including temperature differences |
+| Time reference | Archive, current clock or fixed instant; calendar dates versus fixed durations; same selection for astronomy |
+| Theme management | Atomic synchronization, shared ownership, release of exclusive registrations, CLI preflight and preparation |
+| Prepared analyses | Month-to-date comparisons, qualified rankings, dry spells, events and exact quantiles of interval aggregates; with exclusion reasons and comparison years |
+| Shared calculation | Exact mergeable states for safe scalar aggregates; separate raw/daily weighting; correctable closed blocks |
+| Operation | Cache-only instances, priority and aging, resumable worker, query and worker diagnostics |
+| Community additions | Observation catalog and availability, semantic series defaults, shared grid and year overlays, explicit live journal and fixed JSON dataset |
 
-Es gibt keine neue Dienst-Abhängigkeit. Der bestehende Tick bearbeitet die
-Analytics-Datenbank. Öffentliche Seiten lösen keine Analyse-Nachbearbeitung aus.
-Die fachlichen Grenzen zu Live-Ableitungen, Ereignisauflösung und Quantilpopulation
-sind in der Anleitung benannt.
+There is no new service dependency. The existing tick processes the analytics
+database. Public pages do not trigger analytics post-processing. The guide states
+the domain limits of live derivations, event resolution and quantile populations.
 
-## Funktion und Leistung
+## Function and performance
 
-- Vollständiger Unit-Testlauf unter PHP 8.1.34: 315 Tests erfolgreich.
-- Frontend-Regressionsfälle: Ausgabeprofile, US-/metrische Einheiten, Pending,
-  Delta-Umrechnung, Sommerzeit/Mitternacht, variable Archivintervalle,
-  ET-Summen, Null-Lücken, Theme-Besitz und Rücknahme, geschlossene Zustände,
-  nachträgliche Archivkorrektur, trockene/nasse Intervalle, Vergleichsjahre,
-  Schaltjahrausschlüsse, Quantile, zwei Archive, Live-Ausfall und letzter gültiger Wert.
-- PHPStan auf höchster Projektstufe: keine Fehler.
-- WeeWX-Konformität: alle ausgeführten Checks erfolgreich, darunter 128
-  Frontend-Aggregate und 28 Kalendergrenzen. Die optionalen weewx-evo-Vergleiche
-  für Windy/Weathercloud/InfluxDB/MQTT wurden mangels eingehängter Quellen ausgelassen.
-- Zehnjahresarchiv: 1.051.776 Archivzeilen und 3.652 Tageszusammenfassungen.
-  Gemessener kalter Summenzugriff 57,1 ms, begrenzter Rohdaten-Miss 25,3 ms,
-  warmer Zugriff 0,3 ms bei null Archiv-Lesebudget. Tagesrangliste über alle
-  3.652 Tage: 30 fortgesetzte Workerläufe, zusammen 1.018 ms. Dies sind lokale
-  Messungen in der Testumgebung, keine Laufzeitgarantie für jeden Webhost.
-- Lokales Demo: Desktop und 390-Pixel-Mobileinstellung geprüft; kein
-  horizontaler Überlauf, sieben Regenbalken, keine Browserfehler.
-- JSON-Endpunkt: GET 200, sieben Tagesbalken und 168 Stundenpunkte bei `range=7d`;
-  POST 405. Der vorherige Viewport wurde wiederhergestellt.
+- Complete unit test run on PHP 8.1.34: 315 tests passed.
+- Frontend regression cases: output profiles, US/metric units, pending values,
+  delta conversion, daylight saving time/midnight, variable archive intervals,
+  ET totals, null gaps, theme ownership and removal, closed states, subsequent
+  archive corrections, dry/wet intervals, comparison years, leap year exclusions,
+  quantiles, two archives, live failure and last valid value.
+- PHPStan at the highest project level: no errors.
+- WeeWX conformance: all executed checks passed, including 128 frontend
+  aggregates and 28 calendar boundaries. Optional weewx-evo comparisons for
+  Windy/Weathercloud/InfluxDB/MQTT were skipped because sources were not mounted.
+- Ten-year archive: 1,051,776 archive rows and 3,652 daily summaries.
+  Measured cold sum access: 57.1 ms; bounded raw-data miss: 25.3 ms; warm access:
+  0.3 ms with zero archive read budget. Daily ranking across all 3,652 days:
+  30 resumed worker runs, 1,018 ms total. These are local test-environment
+  measurements, not runtime guarantees for every web host.
+- Local demo: desktop and 390-pixel mobile viewport checked; no horizontal
+  overflow, seven rain bars and no browser errors.
+- JSON endpoint: GET 200, seven daily bars and 168 hourly points with `range=7d`;
+  POST 405. The previous viewport was restored.
 
 ## Security Review
 
-**Security-Sensitive:** YES. Review durch den implementierenden Agenten nach
-`C:/Users/manuel/.agents/skills/security-review/SKILL.md`. Alle zehn Kategorien
-geprüft; keine offenen hohen oder kritischen Befunde.
+**Security-Sensitive:** YES. Reviewed by the implementing agent using
+`C:/Users/manuel/.agents/skills/security-review/SKILL.md`. All ten categories
+checked; no open high or critical findings.
 
-| Kategorie | Ergebnis |
+| Category | Result |
 |---|---|
-| Injection | SQL-Werte gebunden; dynamische Messwert-/Tabellennamen durch vorhandenen Identifier-Prüfer begrenzt. Bedingungen, Prioritäten, Intervalle und Rezeptarten auf Positivlisten. Keine freien SQL-Rezepte. |
-| Authentifizierung | Kein neuer Login oder Credential-Lebenszyklus. Diagnose/Manifestverwaltung nur lokale PHP-/CLI-Schnittstellen. |
-| Vertrauliche Daten | JSON enthält den festen Wetterdatensatz, keine Rohpakete, Sender-Identitäten, Konfiguration, Pfade, Zugangsdaten oder Diagnoselogs. Generische HTTP-Fehlermeldungen. |
-| XML/XXE | Kein XML-Parser oder DTD-Zugriff hinzugefügt. |
-| Zugriffskontrolle | HTTP wählt ausschließlich die feste Demo-Definition; keine vom Client wählbaren Dateipfade oder Archive. Live-Mapping berücksichtigt die konfigurierten Sender. Nur GET am neuen Endpunkt. |
-| Konfiguration | CSP auf eigene Styles/Scripts/Verbindungen begrenzt; nosniff, no-store. Archiv und Live-Journal nur lesend; Analytics separat. |
-| XSS | Value/Theme-HTML wird escaped, JSON nutzt HEX-Flags; Polling setzt textContent, kein innerHTML. |
-| Deserialisierung | JSON mit begrenzter Tiefe und geprüften Rezept-/Ergebnisstrukturen; kein unserialize. Theme-PHP stammt ausschließlich aus vertrauenswürdigen lokalen Dateien. |
-| Komponenten | Keine zusätzliche Laufzeitabhängigkeit. `composer audit --locked --working-dir=/opt/build` einschließlich Entwicklungspaketen: keine bekannten Sicherheitsmeldungen. |
-| Logging/Monitoring | Workerfehler und nächste Versuche gespeichert; Schritte zeigen Quellen, Cachewiederverwendung und Budgetverbrauch. HTTP meldet Details nur im Serverlog. |
+| Injection | SQL values bound; dynamic observation/table names restricted by the existing identifier validator. Conditions, priorities, intervals and recipe types allowlisted. No arbitrary SQL recipes. |
+| Authentication | No new login or credential lifecycle. Diagnostics/manifest management through local PHP/CLI interfaces only. |
+| Sensitive data | JSON contains the fixed weather dataset, no raw packets, sender identities, configuration, paths, credentials or diagnostic logs. Generic HTTP errors. |
+| XML/XXE | No XML parser or DTD access added. |
+| Access control | HTTP selects only the fixed demo definition; no client-selectable file paths or archives. Live mapping respects configured senders. New endpoint accepts GET only. |
+| Configuration | CSP limited to same-origin styles/scripts/connections; nosniff, no-store. Archive and live journal read-only; analytics separate. |
+| XSS | Value/theme HTML escaped, JSON uses HEX flags; polling sets textContent, not innerHTML. |
+| Deserialization | JSON with bounded depth and validated recipe/result structures; no unserialize. Theme PHP comes exclusively from trusted local files. |
+| Components | No additional runtime dependency. `composer audit --locked --working-dir=/opt/build`, including development packages: no known security advisories. |
+| Logging/monitoring | Worker errors and next attempts stored; steps expose sources, cache reuse and budget use. HTTP error details appear only in the server log. |
 
-Zusätzliche Prüfung der Betriebsgrenzen: keine gleichzeitigen Browser-Polls,
-acht Sekunden Request-Timeout, Pause im versteckten Tab; feste Abfrage-/Punktlimits;
-Worker veröffentlicht nicht während einer markierten Archivmutation oder bei
-geändertem Quelltoken. Gemeinsam verwendete Registrierungen werden beim
-Theme-Abgleich nicht entfernt. Cache-State-Zusammenführung akzeptiert nur eine
-exakte disjunkte Partition und verwendet keine gemittelten Mediane.
+Additional operational checks: no overlapping browser polls, eight-second request
+timeout, pause in hidden tabs; fixed query/point limits; worker does not publish
+during a marked archive mutation or after a source token change. Shared
+registrations survive theme synchronization. Cache state merging accepts only an
+exact disjoint partition and does not use averaged medians.
 
 **Security Review Status:** PASS.

@@ -1,16 +1,16 @@
-# Demo-Theme
+# Demo theme
 
-Ein responsives PHP-Theme mit Messwerten, Temperaturverlauf (24 Stunden oder
-7 Tage), Niederschlag, Sonnenzeiten, Monatsvergleich und Rekorden. PHP, CSS,
-SVG und kleines JSON-Polling ohne zusätzliche Bibliotheken.
+A responsive PHP theme with observations, temperature history (24 hours or
+7 days), precipitation, sun times, monthly comparisons and records. Uses PHP,
+CSS, SVG and lightweight JSON polling without additional libraries.
 
-## Starten
+## Getting started
 
-Voraussetzung ist eine konfigurierte, bereits vorhandene Archivdatenbank.
-`frontend.php` liest `weewx-php.conf` im Projektverzeichnis oder den Pfad aus
-`WEEWX_PHP_CONF`. Das Theme verwendet das erste konfigurierte Archiv.
+Requires an existing, configured archive database. `frontend.php` reads
+`weewx-php.conf` in the project directory or the path from `WEEWX_PHP_CONF`.
+The theme uses the first configured archive.
 
-Im Projektverzeichnis ausführen:
+Run in the project directory:
 
 ```sh
 php bin/weewx-php analytics sync demo themes/demo/data.php
@@ -18,34 +18,34 @@ php bin/weewx-php analytics run
 php -S 127.0.0.1:8087 -t public
 ```
 
-Vorschau: <http://127.0.0.1:8087/>. Auf dem Webhost dient `public/` als
-Document Root; der PHP-Entwicklungsserver ist nur für die lokale Vorschau.
+Preview: <http://127.0.0.1:8087/>. On the web host, use `public/` as the
+document root; the PHP development server is only for local previews.
 
-Bei einer anderen Konfigurationsdatei die Umgebungsvariable für CLI und
-Webserver setzen, beispielsweise in PowerShell:
+For a different configuration file, set the environment variable for both CLI
+and web server, for example in PowerShell:
 
 ```powershell
 $env:WEEWX_PHP_CONF = 'D:\Wetter\weewx-php.conf'
 ```
 
-Der reguläre Tick aktualisiert die registrierten Abfragen. Ohne laufenden
-Tick lässt sich die Vorschau mit `analytics run` manuell aktualisieren.
-Noch ausstehende Berechnungen erscheinen als Platzhalter, fällige Ergebnisse
-mit einem Statushinweis. Größere Archive können mehrere Worker-Läufe benötigen.
+The regular tick updates registered queries. Without a running tick, update the
+preview manually with `analytics run`. Pending calculations appear as placeholders;
+results due for refresh have a status indicator. Larger archives may require
+multiple worker runs.
 
-## Anpassen
+## Customization
 
-| Datei | Inhalt |
+| File | Contents |
 |---|---|
-| `data.php` | Ausgabeprofil, Tags, Zeiträume und Aktualisierungstakte |
-| `template.php` | HTML und SVG-Diagramme |
-| `View.php` | Zusammenstellung, Datumsangaben und Diagrammkoordinaten |
-| `../../public/data.php` | Fest definierter JSON-Datensatz aus vorbereiteten Ergebnissen |
-| `../../public/assets/demo.js` | Aktualisierung und Live-Anzeige |
-| `../../public/assets/demo.css` | Farben, Typografie und responsive Darstellung |
-| `../../public/index.php` | Einstieg über `frontend.php` |
+| `data.php` | Output profile, tags, periods and refresh schedules |
+| `template.php` | HTML and SVG charts |
+| `View.php` | View assembly, dates and chart coordinates |
+| `../../public/data.php` | Fixed JSON dataset from prepared results |
+| `../../public/assets/demo.js` | Updates and live display |
+| `../../public/assets/demo.css` | Colors, typography and responsive layout |
+| `../../public/index.php` | Entry point through `frontend.php` |
 
-Zum Beispiel stehen in `data.php`:
+For example, `data.php` contains:
 
 ```php
 'temperature' => $wx->current('outTemp'),
@@ -54,23 +54,22 @@ Zum Beispiel stehen in `data.php`:
 'sunrise' => $wx->almanac()->sun()->rise()->nightly('00:05'),
 ```
 
-Beim Laden gleicht das Theme seine Abfragen automatisch ab; alternativ `analytics
-sync demo themes/demo/data.php` verwenden. Gemeinsam verwendete Ergebnisse bleiben
-erhalten. Alle Wetterdaten kommen über die
-[PHP-Tags](../../docs/frontend.md); das Theme führt keine eigenen SQL-Abfragen aus.
+The theme synchronizes its queries automatically when loaded; alternatively, use
+`analytics sync demo themes/demo/data.php`. Shared results are preserved.
+All weather data come through the [PHP tags](../../docs/frontend.md);
+the theme does not run its own SQL queries.
 
-Die Ausgabe verwendet °C, km/h, hPa und mm, auch bei einem US-Archiv.
-Tageswerte und Verläufe beziehen sich auf die letzte Archivmessung, deren
-Datum sichtbar ist. Sonnenzeiten beziehen sich auf den heutigen Kalendertag
-am Stationsort. Fehlende Werte erscheinen als „—“, Lücken unterbrechen die
-Temperaturlinie. Der Regenverlauf umfasst genau sieben Kalenderdaten einschließlich
-des Tages der letzten Archivmessung;
-Monats- und Jahressummen umfassen die tatsächlich vorhandenen Messwerte.
+Output uses °C, km/h, hPa and mm, even with a US archive. Daily values and history
+refer to the latest archive observation, whose date is visible. Sun times refer
+to today's calendar date at the station. Missing values appear as “—”; gaps
+interrupt the temperature line. Rain history covers exactly seven calendar dates,
+including the date of the latest archive observation. Monthly and yearly totals
+cover the observations actually present.
 
-Für die Temperatur stehen die Diagrammwerte außerdem in einer aufklappbaren
-Tabelle. Alle Bedienelemente funktionieren mit der Tastatur.
+Temperature chart values are also available in an expandable table.
+All controls work with the keyboard.
 
-Das Ausgabeprofil, die cachebaren Vergleiche und die Grenzen der Live-Anzeige
-sind in [Frontend-Rezepte](../../docs/frontend-recipes.md) beschrieben. Bei kurzen
-Archiven bleiben Monatsrekorde und Referenzjahre leer, wenn die notwendige
-Abdeckung fehlt. Das sind fehlende Vergleichsdaten, kein Regenwert von null.
+The output profile, cacheable comparisons and live display limits are described
+in [Frontend recipes](../../docs/frontend-recipes.md). For short archives,
+monthly records and reference years remain empty when the required coverage
+is missing. These are missing comparison data, not zero rainfall.
