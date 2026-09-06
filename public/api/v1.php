@@ -14,6 +14,11 @@ try {
     $configPath = $configEnv === false || $configEnv === '' ? dirname(__DIR__, 2) . '/weewx-php.conf' : $configEnv;
     $feedEnv = getenv('WEEWX_PHP_FEEDS');
     $feedPath = $feedEnv === false || $feedEnv === '' ? dirname($configPath) . '/public-feeds.php' : $feedEnv;
+    if (($feedEnv === false || $feedEnv === '') && !is_file($feedPath) && is_file($configPath)) {
+        $themeFile = \WeewxPhp\Config\ConfFile::read($configPath);
+        $themes = \WeewxPhp\Admin\ThemeRegistry::configured($configPath, file: $themeFile);
+        $feedPath = $themes->file($themes->active($themeFile), 'feeds.php') ?? $feedPath;
+    }
     $feeds = [];
     if (is_file($feedPath)) {
         $wx = Weather::open($configPath)->cacheOnly();

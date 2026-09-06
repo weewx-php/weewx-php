@@ -23,3 +23,14 @@ composer.phar
 # Reference material: a real database with somebody's measurements, and the
 # sibling packages kept beside it for reading.
 /reference/
+
+# Independent extension repositories used during development.
+/.workspaces/
+
+# Installed themes are independent packages.
+/themes/*
+!/themes/basic/
+
+# Local deployment settings and credentials.
+/.deploy/
+__pycache__/

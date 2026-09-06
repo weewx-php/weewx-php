@@ -1,10 +1,18 @@
 # PHP-Tags für Themes
 
+Visitor unit selection is provided by the core. See the
+[display-units reference](display-units.md) and
+[theme integration example](theme-cookbook.md#visitor-unit-selection).
+
+Die [Forecast-Erweiterung](forecast.md) registriert `forecast.day`,
+`forecast.hourly` und `forecast.status`. Die Tags lesen lokale Daten;
+Einheiten und Ausgabeprofile gelten wie bei Messwerten.
+
 Neu: [Ausgabeprofile, Zeitbezug, Theme-Verwaltung und vorbereitete
 Auswertungen](frontend-recipes.md). `series()` ohne Aggregat verwendet jetzt
 Messwertsemantik; mit ausdrücklich angegebenem Aggregat bleibt die Auswahl unverändert.
 
-Ein lauffähiges [Demo-Theme](../themes/demo/README.md) zeigt Messwerte,
+Das separat installierbare [Demo-Theme](themes.md#demo) zeigt Messwerte,
 Temperatur- und Regenverläufe sowie Sonnenzeiten mit diesen Tags.
 
 ```php
@@ -53,10 +61,25 @@ Maximal 1.000 Rezepte können registriert sein. Bei Änderungen an `data.php`
 alte IDs entfernen und neu registrieren. Die Datei ist vertrauenswürdige
 Theme-Software, kein Uploadformat.
 
-Der bestehende Tick erledigt Hintergrundarbeit nach Archivierung und Uploads
-mit höchstens zwei Sekunden seines verbleibenden Budgets. Lange Berechnungen
-setzen beim nächsten Tick fort. `analytics run` verwendet das konfigurierte
-Zeitbudget. Ein zusätzlicher Daemon ist nicht erforderlich.
+HTTP-Ticks stellen Hintergrundarbeit in eine dauerhafte Warteschlange.
+Archivierung, Analysen, externe Dienste und Wartung laufen in getrennten
+CLI-Prozessen. Analysen halten keine Schreibsperre auf dem Live-Journal;
+Cache und Archiv verwenden eigene Datenbanken. Laufende Berechnungen werden
+fortgesetzt, nicht bei jedem Trigger neu gestartet. Das Zeitbudget wird aus
+PHP-Limit, Konfiguration und beobachteten Abbrüchen abgeleitet.
+
+Trockenperioden benötigen vollständige Tagesabdeckung oder einen unveränderten,
+zuverlässigen Regenzähler über die Lücke. Regen über mehrere unbekannte Tage
+und nicht überbrückbare Resets unterbrechen eine belegte Trockenperiode.
+Die Prüfung verbindet gemessene Abschnitte mit Zählerbelegen für einzelne
+Lücken. Ein Monatswechsel außerhalb dieser Lücken verwirft den Tag nicht.
+Tagesdiagramme verwenden dieselbe Prüfung: unbelegte Nullsummen bleiben
+unbekannt; der laufende Tag wird nur bis zum letzten Messwert geprüft und
+zählt noch nicht als abgeschlossener trockener Tag.
+`weewx_rain_evidence` bewahrt Belege für Empfangslücken außerhalb der WeeWX-
+Archivspalten; importierte Tages-/Monats-/Jahreszähler können ebenfalls als
+Beleg dienen. Ein abgelaufener Analysecache erzeugt keinen pauschalen Hinweis
+über aktuellen Messwerten; noch fehlende Werte behalten ihren eigenen Status.
 
 ## Takte, Ergebnisse und historische Blöcke
 
@@ -255,3 +278,20 @@ budgetbedingten Unterbrechung einer Rohdatenabfrage. Keine zugesicherte Host-Lat
 Quellen: [WeeWX-Tags](https://weewx.com/docs/latest/custom/cheetah-generator/),
 [WeeWX-Entwicklerhinweise](https://weewx.com/docs/latest/devnotes/),
 [weewx-xaggs](https://github.com/tkeffer/weewx-xaggs).
+
+## Tags aus Erweiterungen
+
+Optional aktivierte Pakete registrieren Namen in einem eigenen Namensraum:
+
+```php
+if ($wx->hasTag('climate.normal')) {
+    $normal = $wx->tag('climate.normal', ['date' => '2026-09-06']);
+    echo $normal->value('outTemp')->to('degree_C')->html();
+}
+```
+
+Die Ergebnisse sind `Value`, `Series` oder `Report` und unterstützen das
+Ausgabeprofil. Reader verwenden vorbereitete lokale Daten. Externe Vergleiche
+werden nicht als Stationsmesswerte in Analytics registriert. Siehe
+[Erweiterungsregistrierung](extensions.md) und
+[Klima-Tags](https://github.com/weewx-php/extension-climate).

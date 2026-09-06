@@ -5,14 +5,15 @@ Die Beispiele verwenden die vorhandene Frontend-Schicht. Sie enthält die
 WeeWX-/xaggs-Aggregate, astronomische Abfragen, cachebare Vergleiche und
 explizite Live-Werte. Apache ECharts zeichnet die fertig aufbereiteten Reihen.
 
-**Lauffähige Beispiele:** `public/cookbook.php`,
-[`themes/cookbook/data.php`](../themes/cookbook/data.php),
-[`chart-recipes.js`](../public/assets/chart-recipes.js) und
-das [WordPress-Plugin](../examples/wordpress/weewx-weather/README.md).
+**Runnable examples:** the separately installable [Cookbook theme](themes.md#cookbook),
+including its `data.php` and `assets/chart-recipes.js`, and the
+[WordPress plugin](../examples/wordpress/weewx-weather/README.md).
 Die Galerie verwendet echte Daten der konfigurierten Station.
-Ohne veröffentlichte Feeds bleibt die API geschlossen; die Einrichtung folgt unten.
+Das aktive Cookbook stellt seine Feeds bereit. Eigene Feed-Definitionen haben Vorrang; die Einrichtung folgt unten.
 
 ## Inhalt
+
+- [Visitor unit selection](#visitor-unit-selection)
 
 1. [Arbeitsweise und Dateistruktur](#1-arbeitsweise-und-dateistruktur)
 2. [Ein erstes PHP-Theme](#2-ein-erstes-php-theme)
@@ -27,6 +28,86 @@ Ohne veröffentlichte Feeds bleibt die API geschlossen; die Einrichtung folgt un
 11. [Einbettung auf beliebigen Websites](#11-einbettung-auf-beliebigen-websites)
 12. [WordPress-Sidebar-Widgets](#12-wordpress-sidebar-widgets)
 13. [Prüfen und Fehler finden](#13-prüfen-und-fehler-finden)
+
+## Visitor unit selection
+
+Use the shared output profile when a visitor should be able to switch units.
+The running Demo and Cookbook packages include selection controls. The
+[display-units reference](display-units.md) lists profiles, defaults, request
+parameters and response metadata.
+
+The core supplies `$wx` and `$theme` to `theme.php` and `snapshot.php`. Use the
+same output profile before defining queries or reading live values:
+
+```php
+use WeewxPhp\Frontend\Output;
+
+$wx = $wx->output($theme->output(new Output(
+    language: $theme->language,
+    decimals: ['group_percent' => 0, 'mbar' => 0],
+)));
+$temperature = $wx->current('outTemp')->value();
+$history = $wx->last('24h')->series('outTemp', '15m')->series();
+
+echo $temperature->html();
+$chart = $history->jsonSerialize();
+```
+
+The same temperature might display as `20.0 °C` or `68.0 °F`. Do not append a
+fixed unit to `html()` or convert the chart values again in JavaScript.
+For a shared `data.php` also used by the CLI, initialize
+`$theme ??= new WeewxPhp\Frontend\Theme();` before obtaining its output profile.
+
+Place this control in the template. Keep any theme-specific navigation state,
+such as the selected chart range, in hidden fields:
+
+```php
+<form method="get">
+    <label for="units"><?= $theme->html('Units') ?></label>
+    <select id="units" name="units">
+        <?php foreach ($theme->unitOptions() as $id => $label): ?>
+        <option value="<?= htmlspecialchars($id, ENT_QUOTES, 'UTF-8') ?>"<?= $id === $theme->units->selection ? ' selected' : '' ?>><?= htmlspecialchars($label, ENT_QUOTES, 'UTF-8') ?></option>
+        <?php endforeach; ?>
+    </select>
+    <button type="submit"><?= $theme->html('Apply') ?></button>
+</form>
+```
+
+Build JSON feed URLs with the effective profile, for example
+`api/v1.php?feed=charts&units=us`. In an HTML attribute, escape `&` as `&amp;`.
+The Cookbook template passes this URL to both the chart client and its widgets.
+For a theme snapshot, use `data.php?units=us` and include the selected chart range.
+Refresh the complete display when switching profiles so values and labels change
+together.
+
+An ECharts option can bind directly to the response metadata:
+
+```javascript
+const series = feed.data.temperature24h;
+const number = new Intl.NumberFormat(document.documentElement.lang || 'en', {
+    minimumFractionDigits: series.decimals,
+    maximumFractionDigits: series.decimals,
+});
+const option = {
+    xAxis: {type: 'time'},
+    yAxis: {type: 'value', name: series.unitLabel, scale: true},
+    tooltip: {
+        trigger: 'axis',
+        renderMode: 'richText',
+        valueFormatter: value => value === null ? '—' : `${number.format(value)} ${series.unitLabel}`,
+    },
+    series: [{
+        type: 'line', connectNulls: false,
+        data: series.points.map(point => [point.end * 1000, point.value]),
+    }],
+};
+```
+
+See `assets/chart-recipes.js` in the Cookbook package for dual axes, rain totals,
+hardware intervals and monthly comparisons using the same metadata. Extension
+values returned as `Value`, `Series` or `Report` participate in the shared output
+profile; remove explicit conversions such as `to('degree_C')` from their display
+code. Keep fixed units only where the calculation itself requires them.
 
 ## 1. Arbeitsweise und Dateistruktur
 
@@ -134,7 +215,7 @@ php bin/weewx-php --config /etc/weewx-php/station.conf analytics run
 Für den Webprozess `WEEWX_PHP_CONF=/etc/weewx-php/station.conf` setzen.
 Anschließend `/mein-theme.php` öffnen. Ein leeres Cache-Ergebnis zeigt einen
 Platzhalter; bei umfangreicher Vorbereitung können mehrere Workerläufe nötig sein.
-Für ein vollständiges PHP-Theme mit Fehlerbehandlung siehe [Demo](../themes/demo/README.md).
+Für ein vollständiges PHP-Theme mit Fehlerbehandlung siehe [Demo](themes.md#demo).
 
 Für den Umstieg von Cheetah:
 
@@ -399,8 +480,7 @@ $range = $theme->extras['default_range'] ?? '24h';
 ```
 
 Die registrierten, typisierten Einstellungen sind in `extras` verfügbar.
-Als Beispiel dienen [settings.json](../themes/demo/settings.json) und
-[de.json](../themes/demo/locales/de.json). Eigene Eingaben wie ein Bereichsschalter
+Als Beispiel dienen `settings.json` und `locales/de.json` des [Demo-Pakets](themes.md#demo). Eigene Eingaben wie ein Bereichsschalter
 auf feste Rezepte abbilden:
 
 ```php
@@ -696,7 +776,7 @@ return [
 
 Für Archiv-/Diagrammfeeds Rezepte vorzugsweise aus dem gemeinsamen Theme-Manifest
 übernehmen und dessen Bedarf mit `analytics sync` verwalten, wie
-[`themes/cookbook/feeds.php`](../themes/cookbook/feeds.php) zeigt.
+`feeds.php` des [Cookbook-Pakets](themes.md#cookbook) zeigt.
 Der API-Aufruf registriert fehlende feste Rezepte zwar ebenfalls, berechnet
 sie aber nie inline. Unabhängige API-Rezepte können ein eigenes `data.php`
 und einen eigenen Besitzer, etwa `api-public`, erhalten. Bei Deaktivierung
@@ -956,7 +1036,7 @@ Die mitgelieferten Prüfungen:
 ```sh
 docker compose -f tests/docker/compose.yml run --rm unit
 docker compose -f tests/docker/compose.yml run --rm lint
-node --test --test-isolation=none tests/chart-recipes.test.mjs tests/feed-client.test.mjs
+docker compose -f tests/docker/compose.yml run --rm frontend-js
 php tests/wordpress-smoke.php
 ```
 

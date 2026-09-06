@@ -9,7 +9,7 @@ use Throwable;
 /** No globals: transport checks, authentication and commands can be exercised together. */
 final class Controller
 {
-    public function __construct(private readonly string $path, private readonly int $now, private readonly bool $localHttp = false) {}
+    public function __construct(private readonly string $path, private readonly int $now, private readonly bool $localHttp = false, private readonly ?\WeewxPhp\Upload\Http\HttpClient $http = null) {}
 
     /** @param array<string, mixed> $query
      * @param array<string, mixed> $post */
@@ -46,7 +46,7 @@ final class Controller
                     if (!$session['authenticated']) {
                         throw new Problem('error.login_required', status: 403);
                     }
-                    if ($action === 'mapping.save_all' && Input::text($post, 'complete') !== '1') {
+                    if (in_array($action, ['mapping.save_all', 'archive.stations', 'mapping.accept_suggestions'], true) && Input::text($post, 'complete') !== '1') {
                         throw new Problem('error.incomplete_form');
                     }
                     if ($action === 'logout') {
@@ -63,11 +63,44 @@ final class Controller
                         $auth->audit('connection.reveal', $this->now);
                         return new Response(200, (new Page($read, $translator, $session['csrf']))->connection($keys), $session['token']);
                     }
-                    (new Service($this->path, $this->now))->execute($action, $post);
-                    $destination = ['page' => $page, 'saved' => '1'];
-                    foreach (['archive', 'station', 'theme', 'upload'] as $key) {
+                    if ($action === 'location.search') {
+                        try {
+                            $result = (new Geocoding($read->config->settings, $this->http ?? \WeewxPhp\Upload\Http\Http::client(), $this->now))->search(Input::text($post, 'query'), $translator->language);
+                            return new Response(200, json_encode($result, JSON_THROW_ON_ERROR), $session['token'], contentType: 'application/json; charset=utf-8');
+                        } catch (Throwable $problem) {
+                            return new Response(
+                                $problem instanceof Problem ? $problem->status : 502,
+                                json_encode(['error' => $translator->text($problem instanceof Problem ? $problem->getMessage() : 'error.location_search')], JSON_THROW_ON_ERROR),
+                                $session['token'],
+                                contentType: 'application/json; charset=utf-8',
+                            );
+                        }
+                    }
+                    if (str_starts_with($action, 'extension.')) {
+                        (new ExtensionService($this->path, $this->now, $this->http ?? \WeewxPhp\Upload\Http\Http::client()))->execute($action, $post);
+                    } elseif (str_starts_with($action, 'theme.') && $action !== 'theme.save') {
+                        (new ThemeService($this->path, $this->now, $this->http ?? \WeewxPhp\Upload\Http\Http::client()))->execute($action, $post);
+                    } else {
+                        (new Service($this->path, $this->now))->execute($action, $post);
+                    }
+                    $destination = ['page' => $action === 'archive.stations' ? 'fields' : $page, 'saved' => '1'];
+                    $result = match ($action) {
+                        'maintenance.queue' => 'queued',
+                        'backup.create' => 'queued',
+                        'theme.install', 'extension.install' => 'installed',
+                        'theme.enable', 'extension.enable' => 'enabled',
+                        'theme.disable', 'extension.disable' => 'disabled',
+                        'theme.remove', 'extension.remove' => 'removed',
+                        'theme.refresh', 'extension.refresh' => 'refreshed',
+                        default => '',
+                    };
+                    if ($result !== '') {
+                        $destination['result'] = $result;
+                    }
+                    $destination['lang'] = $translator->language;
+                    foreach (['archive', 'station', 'theme', 'upload', 'extension'] as $key) {
                         $value = Input::text($post, $key);
-                        if ($value !== '') {
+                        if ($value !== '' && ($key !== 'extension' || $action === 'extension.settings') && ($key !== 'theme' || $action === 'theme.save')) {
                             $destination[$key] = $value;
                         }
                     }
@@ -76,6 +109,9 @@ final class Controller
                     $error = $problem->getMessage();
                     $status = $problem->status;
                     $auth->audit('request.rejected', $this->now);
+                    if ($error === 'error.csrf') {
+                        return new Response(403, Page::escape($translator->text($error)), $session['token']);
+                    }
                 } catch (\InvalidArgumentException|\WeewxPhp\Config\ConfigError|\WeewxPhp\Archive\MappingError $problem) {
                     $error = 'error.validation';
                     // Configuration serializer errors can contain credential values.
@@ -84,14 +120,32 @@ final class Controller
                     $auth->audit('validation.failed', $this->now);
                 }
             }
-            $view = new Page($read, $translator, $session['csrf'], $post);
+            $view = new Page($read, $translator, $session['csrf'], $post, $this->http);
             if (!$session['authenticated']) {
+                if (Input::text($query, 'download') !== '') {
+                    return new Response(403, 'Forbidden', $session['token']);
+                }
                 if (Input::text($query, 'format') === 'column') {
                     return new Response(403, '{}', $session['token'], contentType: 'application/json; charset=utf-8');
                 }
                 return new Response($status, $view->login($auth->configured(), $error), $session['token']);
             }
             $archive = Input::text($query, 'archive');
+            if ($method === 'GET' && $page === 'backups' && Input::text($query, 'download') !== '') {
+                $filename = Input::text($query, 'download');
+                try {
+                    $download = (new \WeewxPhp\Backup\Backups($read->config->settings))->download($filename);
+                } catch (\RuntimeException) {
+                    return new Response(404, $translator->text('error.not_found'), $session['token']);
+                }
+                try {
+                    $auth->audit('backup.download', $this->now);
+                } catch (Throwable $error) {
+                    fclose($download);
+                    throw $error;
+                }
+                return new Response(200, token: $session['token'], contentType: 'application/x-tar', download: $download, filename: $filename);
+            }
             if (in_array($page, ['archives', 'fields'], true) && $archive !== '' && $read->config->archive($archive) === null) {
                 return new Response(404, $translator->text('error.not_found'), $session['token']);
             }

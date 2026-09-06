@@ -2,6 +2,48 @@
 // Native forms remain the authoritative submission path.
 const dirty = new Set();
 document.documentElement.classList.add("js");
+document.querySelectorAll(".station-table, .archive-table").forEach(table => {
+  const headings = [...table.querySelectorAll("thead th")].map(cell => cell.textContent);
+  table.querySelectorAll("tbody tr").forEach(row => {
+    [...row.cells].forEach((cell, index) => { cell.dataset.label = headings[index] || ""; });
+  });
+});
+const feedback = document.getElementById("action-feedback");
+const labels = feedback ? JSON.parse(feedback.dataset.labels) : {};
+let feedbackTimer, slowTimer;
+const pendingForms = new Map();
+function announce(message, kind = "info", persistent = false) {
+  if (!feedback) return;
+  clearTimeout(feedbackTimer);
+  feedback.textContent = message;
+  feedback.dataset.kind = kind;
+  feedback.classList.add("is-visible");
+  if (!persistent) feedbackTimer = setTimeout(() => feedback.classList.remove("is-visible"), 6000);
+}
+function updateDirty(form) {
+  const status = form.querySelector("[data-form-status]");
+  if (status) status.textContent = dirty.has(form) ? document.body.dataset.unsaved : labels.unchanged;
+  form.classList.toggle("is-dirty", dirty.has(form));
+}
+function beginNavigation(message) {
+  document.body.classList.add("is-navigating");
+  announce(message, "working", true);
+  clearTimeout(slowTimer);
+  slowTimer = setTimeout(() => announce(labels.slow, "working", true), 15000);
+}
+function restoreInteraction() {
+  clearTimeout(slowTimer);
+  document.body.classList.remove("is-navigating");
+  pendingForms.forEach((button, form) => {
+    form.removeAttribute("aria-busy");
+    if (button) {
+      button.removeAttribute("aria-disabled");
+      button.classList.remove("is-working");
+    }
+  });
+  pendingForms.clear();
+  if (feedback) feedback.classList.remove("is-visible");
+}
 function syncColumns() {
   document.querySelectorAll("select[data-column-target]").forEach(select => {
     const row = select.closest("tr").nextElementSibling;
@@ -14,15 +56,84 @@ function syncColumns() {
 syncColumns();
 document.addEventListener("change", syncColumns);
 document.querySelectorAll("form[data-edit-form]").forEach(form => {
-  form.addEventListener("change", () => { dirty.add(form); });
-  form.addEventListener("input", () => { dirty.add(form); });
-  form.addEventListener("reset", () => { dirty.delete(form); setTimeout(syncColumns, 0); });
-  form.addEventListener("submit", () => { dirty.delete(form); });
+  const actions = form.querySelector(".form-actions");
+  if (form.hasAttribute("data-unsaved-draft") && form.querySelector('input:not([type="hidden"]), select, textarea')) dirty.add(form);
+  if (actions && form.querySelector('input:not([type="hidden"]), select, textarea')) {
+    const status = document.createElement("span");
+    status.dataset.formStatus = "";
+    status.className = "form-status";
+    status.setAttribute("role", "status");
+    actions.append(status);
+    updateDirty(form);
+  }
+  form.addEventListener("change", () => { dirty.add(form); updateDirty(form); });
+  form.addEventListener("input", () => { dirty.add(form); updateDirty(form); });
+  form.addEventListener("reset", () => {
+    if (!form.hasAttribute("data-unsaved-draft")) dirty.delete(form);
+    updateDirty(form);
+    announce(labels.reset);
+    setTimeout(syncColumns, 0);
+  });
 });
+document.addEventListener("submit", event => {
+  const form = event.target;
+  if (event.defaultPrevented || form.hasAttribute("data-import-form")) return;
+  if (pendingForms.has(form)) { event.preventDefault(); return; }
+  const submitter = event.submitter;
+  pendingForms.set(form, submitter);
+  form.setAttribute("aria-busy", "true");
+  // Disabling a submitter would remove its name/value from the native POST.
+  if (submitter) {
+    submitter.setAttribute("aria-disabled", "true");
+    submitter.classList.add("is-working");
+  }
+  beginNavigation(form.method === "get" ? labels.loading : labels.working);
+});
+document.addEventListener("invalid", event => {
+  const details = event.target.closest("details:not([open])");
+  if (details) details.open = true;
+  announce(labels.invalid, "error");
+}, true);
+document.addEventListener("click", event => {
+  const refresh = event.target.closest("[data-refresh]");
+  if (refresh) { beginNavigation(labels.loading); location.reload(); return; }
+  const button = event.target.closest('button[aria-disabled="true"]');
+  if (button) { event.preventDefault(); return; }
+  const link = event.target.closest("a[href]");
+  if (!link || event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || link.target === "_blank") return;
+  const target = new URL(link.href, location.href);
+  if (target.origin !== location.origin) return;
+  if (link.hasAttribute("download") || target.searchParams.has("download")) {
+    announce(labels.download);
+  } else if (target.pathname !== location.pathname || target.search !== location.search) {
+    beginNavigation(labels.loading);
+  }
+});
+const menu = document.querySelector(".menu-toggle");
+if (menu) {
+  menu.addEventListener("click", () => {
+    const open = menu.getAttribute("aria-expanded") !== "true";
+    menu.setAttribute("aria-expanded", String(open));
+    menu.textContent = open ? labels.close : labels.menu;
+  });
+  document.addEventListener("keydown", event => {
+    if (event.key === "Escape" && menu.getAttribute("aria-expanded") === "true") {
+      menu.click(); menu.focus();
+    }
+  });
+}
+const serverNotice = document.querySelector("main > .notice");
+if (serverNotice) {
+  serverNotice.setAttribute("tabindex", "-1");
+  serverNotice.focus();
+}
+window.addEventListener("pageshow", restoreInteraction);
 window.addEventListener("beforeunload", event => {
-  if (dirty.size) {
+  if ([...dirty].some(form => !pendingForms.has(form))) {
     event.preventDefault();
     event.returnValue = "";
+    // A cancelled leave keeps the current document and its unsaved state.
+    setTimeout(restoreInteraction, 0);
   }
 });
 

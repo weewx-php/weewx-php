@@ -76,8 +76,8 @@ final class DerivedTest extends TestCase
         // Another sender's counter is another counter.
         self::assertArrayNotHasKey('rain', $derived->applyPacket($packet(10.0), 'b'));
         self::assertSame(0.0, $derived->applyPacket($packet(1.5), 'a')['rain']);
-        // A total that fell was reset, and the new value is what fell since.
-        self::assertSame(0.2, $derived->applyPacket($packet(0.2), 'a')['rain']);
+        // A falling counter could also be a correction: rebase without inventing rain.
+        self::assertArrayNotHasKey('rain', $derived->applyPacket($packet(0.2), 'a'));
         // The station's own rain is kept, and its total remembered all the same.
         self::assertSame(0.1, $derived->applyPacket($packet(0.7, 0.1), 'a')['rain']);
         self::assertEqualsWithDelta(0.2, $derived->applyPacket($packet(0.9), 'a')['rain'], 1e-12);

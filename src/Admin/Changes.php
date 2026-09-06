@@ -35,7 +35,11 @@ final class Changes
             $edit($file, $before->config);
             $resolved = realpath($this->path);
             $after = ConfigReader::read($file, dirname($resolved === false ? $this->path : $resolved));
-            $schemas = self::validate($before->config, $after);
+            // Package installation must also work before an archive's first tick.
+            // Only an edit confined to its package section may bypass archive work.
+            $packageSection = str_starts_with($operation, 'extension.') ? 'Extensions' : (str_starts_with($operation, 'theme.') ? 'Themes' : null);
+            $schemas = $packageSection !== null && self::onlySectionChanged($before->file, $file, $packageSection)
+                ? [] : self::validate($before->config, $after);
             $revisions = Revisions::open($settings);
             try {
                 $revisions->record(Revisions::snapshot($before->file, $before->config), $before->config, $this->now);
@@ -55,6 +59,15 @@ final class Changes
         } finally {
             $lock->release();
         }
+    }
+
+    private static function onlySectionChanged(ConfFile $before, ConfFile $after, string $section): bool
+    {
+        $a = ConfFile::parse($before->toString());
+        $b = ConfFile::parse($after->toString());
+        $a->root()->remove($section);
+        $b->root()->remove($section);
+        return $a->toString() === $b->toString();
     }
 
     /** @return array<string, string> */

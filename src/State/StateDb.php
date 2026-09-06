@@ -16,6 +16,7 @@ use WeewxPhp\Db\Sqlite;
 final class StateDb
 {
     private const SCHEMA = <<<'SQL'
+        CREATE TABLE IF NOT EXISTS execution_profile (name TEXT PRIMARY KEY, payload TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS archives (
             id             TEXT NOT NULL PRIMARY KEY,
             created_by_app INTEGER NOT NULL DEFAULT 0,
@@ -284,7 +285,7 @@ final class StateDb
     public function runs(int $limit = 20): array
     {
         $runs = [];
-        foreach ($this->db->query('SELECT started_at, finished_at, trigger, summary FROM runs ORDER BY id DESC LIMIT ?', [$limit]) as $row) {
+        foreach ($this->db->query('SELECT started_at, finished_at, trigger, summary FROM runs ORDER BY started_at DESC, id DESC LIMIT ?', [$limit]) as $row) {
             $runs[] = [
                 'started_at' => self::int($row['started_at']),
                 'finished_at' => self::int($row['finished_at']),
@@ -296,6 +297,19 @@ final class StateDb
     }
 
     // -- helpers ----------------------------------------------------------
+
+    /** @return array<string, mixed> */
+    public function executionProfile(string $name): array
+    {
+        $value = $this->db->scalar('SELECT payload FROM execution_profile WHERE name = ?', [$name]);
+        return is_string($value) ? Json::object($value) : [];
+    }
+
+    /** @param array<string, mixed> $profile */
+    public function saveExecutionProfile(string $name, array $profile): void
+    {
+        $this->db->exec('INSERT INTO execution_profile(name, payload) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET payload = excluded.payload', [$name, json_encode($profile, JSON_THROW_ON_ERROR)]);
+    }
 
     private function ensureArchive(string $id): void
     {

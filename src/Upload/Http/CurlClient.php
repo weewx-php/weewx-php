@@ -41,18 +41,26 @@ final class CurlClient implements HttpClient
             $options[CURLOPT_POSTFIELDS] = $request->body;
         }
         curl_setopt_array($handle, $options);
+        $boundedBody = '';
+        if ($request->maxResponseBytes !== null) {
+            curl_setopt($handle, CURLOPT_WRITEFUNCTION, static function (\CurlHandle $handle, string $chunk) use (&$boundedBody, $request): int {
+                if (strlen($boundedBody) + strlen($chunk) > $request->maxResponseBytes) {
+                    return 0;
+                }
+                $boundedBody .= $chunk;
+                return strlen($chunk);
+            });
+        }
         $body = curl_exec($handle);
-        if (!is_string($body)) {
+        if ($body === false) {
             $error = curl_error($handle);
             $code = curl_errno($handle);
-            curl_close($handle);
             throw new Rejected(
                 sprintf('%s: %s', $request->masked(), $error === '' ? 'no answer' : $error),
                 permanent: $code === CURLE_COULDNT_RESOLVE_HOST,
             );
         }
         $status = curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
-        curl_close($handle);
-        return new HttpResponse(is_int($status) ? $status : 0, $body);
+        return new HttpResponse(is_int($status) ? $status : 0, $request->maxResponseBytes === null && is_string($body) ? $body : $boundedBody);
     }
 }

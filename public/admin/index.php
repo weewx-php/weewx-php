@@ -41,4 +41,14 @@ header('Content-Type: ' . $response->contentType);
 if ($response->location !== null) {
     header('Location: ' . $response->location);
 }
-echo $response->body;
+if (is_resource($response->download) && $response->filename !== null) {
+    header('Content-Disposition: attachment; filename="' . $response->filename . '"');
+    $info = fstat($response->download);
+    if ($info !== false) {
+        header('Content-Length: ' . $info['size']);
+    }
+    fpassthru($response->download);
+    fclose($response->download);
+} else {
+    echo $response->body;
+}

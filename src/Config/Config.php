@@ -18,6 +18,7 @@ final class Config
      * @param array<string, UploadConfig> $uploads By id, in file order.
      * @param array<string, string> $measurements Observation name to measurement kind.
      * @param array<string, array<string, \WeewxPhp\Measurement\Source>> $sources Station/native field definitions.
+     * @param array<string, \WeewxPhp\Extension\Definition> $extensions Enabled local packages.
      */
     public function __construct(
         public readonly Settings $settings,
@@ -28,6 +29,7 @@ final class Config
         public readonly IngestConfig $ingest = new IngestConfig(),
         public readonly array $measurements = [],
         public readonly array $sources = [],
+        public readonly array $extensions = [],
     ) {}
 
     /**

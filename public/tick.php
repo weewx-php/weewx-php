@@ -14,9 +14,9 @@ declare(strict_types=1);
  * is looked for beside the application, or where WEEWX_PHP_CONF points.
  */
 
+use WeewxPhp\Tick\Dispatcher;
 use WeewxPhp\Tick\Outcome;
 use WeewxPhp\Tick\Runtime;
-use WeewxPhp\Tick\Tick;
 
 require dirname(__DIR__) . '/src/autoload.php';
 
@@ -33,7 +33,7 @@ try {
 } catch (Throwable $error) {
     http_response_code(500);
     echo json_encode(['status' => Outcome::ERROR, 'error' => 'the configuration could not be loaded; see the server log'], JSON_THROW_ON_ERROR);
-    error_log('weewx-php: ' . $error->getMessage());
+    error_log('weewx-php configuration failed (' . $error::class . ')');
     exit;
 }
 
@@ -46,9 +46,9 @@ if ($expected === null || !is_string($offered) || !hash_equals($expected, $offer
 }
 
 try {
-    $outcome = (new Tick($runtime))->run('http');
+    $queued = (new Dispatcher($runtime))->request();
 } catch (Throwable $error) {
-    $runtime->log->error('tick (http): ' . $error->getMessage());
+    error_log('weewx-php tick dispatch failed (' . $error::class . ')');
     http_response_code(500);
     echo json_encode(['status' => Outcome::ERROR, 'error' => 'the tick failed; see the log'], JSON_THROW_ON_ERROR);
     exit;
@@ -56,9 +56,5 @@ try {
     $runtime->close();
 }
 
-http_response_code(match ($outcome->status) {
-    Outcome::OK => 200,
-    Outcome::BUSY => 503,
-    default => 500,
-});
-echo json_encode($outcome->toArray(), JSON_THROW_ON_ERROR);
+http_response_code(202);
+echo json_encode($queued, JSON_THROW_ON_ERROR);

@@ -53,6 +53,11 @@ final class AnalyticsCommand implements Command
         }
         $runtime = $app->runtime();
         $runtime->ensureDataDir();
+        if ($action === 'run') {
+            $answer = (new Worker($runtime))->run(Budget::of($runtime->clock, \WeewxPhp\Tick\ExecutionProfile::limit($runtime->config->settings->timeBudget, (int) ini_get('max_execution_time')), PHP_INT_MAX), drain: true);
+            $app->console()->line(json_encode($answer, JSON_THROW_ON_ERROR));
+            return $answer['failed'] > 0 || $answer['busy'] > 0 ? 1 : 0;
+        }
         $lock = Lock::tryAcquire($runtime->config->settings->lockPath());
         if ($lock === null) {
             $app->console()->error('busy');
@@ -103,10 +108,6 @@ final class AnalyticsCommand implements Command
                 $cache->forget($args[0]);
             } elseif ($action === 'status') {
                 $app->console()->line(json_encode($cache->status(), JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT));
-            } else {
-                $answer = (new Worker($runtime))->run(Budget::of($runtime->clock, $runtime->config->settings->timeBudget, PHP_INT_MAX));
-                $app->console()->line(json_encode($answer, JSON_THROW_ON_ERROR));
-                return $answer['failed'] > 0 ? 1 : 0;
             }
             return 0;
         } finally {

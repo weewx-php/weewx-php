@@ -1,0 +1,21 @@
+{
+  "Language": "Language",
+  "English": "English",
+  "Deutsch": "Deutsch",
+  "Weather station": "Weather station",
+  "No weather data": "No weather data",
+  "Live data": "Live data",
+  "Live data unavailable": "Live data unavailable",
+  "Measurement": "Measurement",
+  "Value": "Value",
+  "Measured at": "Measured at",
+  "Temperature": "Temperature",
+  "Humidity": "Humidity",
+  "Pressure": "Pressure",
+  "Wind": "Wind",
+  "Gusts": "Gusts",
+  "Wind direction": "Wind direction",
+  "Rain rate": "Rain rate",
+  "Stale": "Stale",
+  "Y-m-d H:i:s": "Y-m-d H:i:s"
+}

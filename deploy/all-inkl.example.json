@@ -1,0 +1,7 @@
+{
+  "host": "your-ftp-server.kasserver.com",
+  "username": "your-ftp-username",
+  "remote_root": "/weewx-php",
+  "port": 21,
+  "timeout": 30
+}

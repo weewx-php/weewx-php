@@ -33,7 +33,7 @@ final class ConfigReader
 
     private const SETTINGS_KEYS = ['data_dir', 'timezone', 'archive_interval', 'archive_delay', 'loop_hilo',
         'late_packets', 'live_retention', 'raw_retention', 'time_budget', 'max_intervals_per_run',
-        'journal_mode', 'tick_token', 'log_level'];
+        'journal_mode', 'tick_token', 'log_level', 'backup_enabled', 'backup_retention_days', 'visit_tick_enabled'];
     private const STATION_KEYS = ['name', 'expected_interval', 'stale_after', 'down_after'];
     private const ARCHIVE_KEYS = ['name', 'location', 'latitude', 'longitude', 'altitude', 'database',
         'unit_system', 'timezone', 'primary', 'senders', 'auto_mapping', 'explicit_mapping', 'enabled', 'archive_interval'];
@@ -63,7 +63,7 @@ final class ConfigReader
         $uploads = $reader->uploads($root->optionalSection('Uploads'), $archives);
 
         foreach ($root->keys() as $key) {
-            if (!in_array($key, self::SETTINGS_KEYS, true) && !in_array($key, ['Stations', 'Archives', 'Uploads', 'Ingest', 'Measurements', 'Sources', 'Admin', 'Themes'], true)) {
+            if (!in_array($key, self::SETTINGS_KEYS, true) && !in_array($key, ['Stations', 'Archives', 'Uploads', 'Ingest', 'Measurements', 'Sources', 'Admin', 'Themes', 'Extensions'], true)) {
                 $reader->warnings[] = sprintf('%s: unknown setting, ignored', $key);
             }
         }
@@ -77,6 +77,7 @@ final class ConfigReader
             $ingest,
             $reader->measurements,
             self::sources($root->optionalSection('Sources'), $reader->measurements),
+            \WeewxPhp\Extension\Definition::read($root->optionalSection('Extensions'), $baseDir),
         );
     }
 
@@ -183,15 +184,19 @@ final class ConfigReader
         if ($rawRetention < 0 || $rawRetention > 86400) {
             throw ConfigError::at('raw_retention', 'must be between 0 and 1d');
         }
-        $budget = $root->optional('time_budget')?->int() ?? 20;
-        if ($budget < 1 || $budget > 3600) {
-            throw ConfigError::at('time_budget', 'must be between 1 and 3600 seconds');
+        $budget = $root->optional('time_budget')?->int() ?? 0;
+        if ($budget < 0 || $budget > 3600) {
+            throw ConfigError::at('time_budget', 'must be between 0 (automatic) and 3600 seconds');
         }
         $maxIntervals = $root->optional('max_intervals_per_run')?->int() ?? 100;
         if ($maxIntervals < 1) {
             throw ConfigError::at('max_intervals_per_run', 'must be at least 1');
         }
         $token = $root->optional('tick_token')?->string();
+        $backupRetention = $root->optional('backup_retention_days')?->int() ?? 3;
+        if ($backupRetention < 1 || $backupRetention > 3650) {
+            throw ConfigError::at('backup_retention_days', 'must be between 1 and 3650');
+        }
         if ($token === '') {
             $token = null;
         }
@@ -210,6 +215,9 @@ final class ConfigReader
             journalMode: self::enum($root, 'journal_mode', JournalMode::class, JournalMode::Wal),
             tickToken: $token,
             logLevel: self::logLevel($root),
+            backupEnabled: $root->optional('backup_enabled')?->bool() ?? true,
+            backupRetentionDays: $backupRetention,
+            visitTickEnabled: $root->optional('visit_tick_enabled')?->bool() ?? true,
         );
     }
 

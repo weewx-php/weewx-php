@@ -22,6 +22,7 @@ final class Computation
     private bool $fallbackDone = false;
     private ?int $dailyCursor = null;
     private ?Accumulator $dailyStats = null;
+    private ?int $rainCoveredThrough = null;
     /** @var list<array<string, mixed>> */
     private array $excluded = [];
     /** @var list<Span> */
@@ -181,9 +182,9 @@ final class Computation
             || Span::date($span->start, $this->reader->config->timezone)->modify('+1 day')->getTimestamp() !== $span->end)) {
             throw new QueryError('Historical aggregates need exactly one calendar day');
         }
-        $chunkKey = hash('sha256', json_encode([Cache::VERSION, $this->reader->config->id, $spec->observation,
+        $chunkKey = hash('sha256', CacheJson::encode([Cache::VERSION, $this->reader->config->id, $spec->observation,
             $spec->aggregate === 'cumulative' ? 'sum' : $spec->aggregate, $span->start, $span->end,
-            $daily, $spec->threshold, $spec->thresholdUnit, $spec->coverage], JSON_THROW_ON_ERROR));
+            $daily, $spec->threshold, $spec->thresholdUnit, $spec->coverage, $spec->analysis]));
         if ($this->cursor === null && $cache !== null && $spec->every !== null && $spec->every !== 'archive' && !$historical) {
             $saved = $cache->chunk($chunkKey);
             if ($saved !== null) {
@@ -215,7 +216,7 @@ final class Computation
         $rows = 0;
         $history = $this->reader->hardware ? new HardwareHistory($this->reader) : null;
         $input = $history === null ? $this->reader->rows($sql, [$cursor, $end], $budget)
-            : ($daily ? $history->days($obs, $table, $cursor, $end, $budget) : $history->rows($obs, $start, $end, $cursor, $budget));
+            : ($daily ? iterator_to_array($history->days($obs, $table, $cursor, $end, $budget, 1), false) : $history->rows($obs, $start, $end, $cursor, $budget));
         foreach ($reused ? [] : $input as $row) {
             $stamp = $row['dateTime'] ?? null;
             if (!is_int($stamp)) {
@@ -254,7 +255,11 @@ final class Computation
                 $this->stats->add($row, $daily, $spec, $threshold);
             }
         }
-        if ($rows === 512) {
+        if ($daily && $history !== null && $rows > 0) {
+            if (iterator_to_array($history->days($obs, $table, $this->cursor ?? $cursor, $end, $budget, 1), false) !== []) {
+                return false;
+            }
+        } elseif ($rows === 512) {
             return false;
         }
         if ($spec->every === 'archive') {
@@ -276,6 +281,25 @@ final class Computation
             }
         }
         $coverage = $historical ? null : ($span->length() > 0 ? min(1.0, $this->stats->weight / $span->length()) : null);
+        if ($spec->observation === 'rain' && (in_array($spec->aggregate, ['sum', 'cumulative'], true) || $spec->analysis === 'spell')
+            && $spec->every === 'day' && ($value === null || $value === 0.0 || $value === 0) && ($coverage ?? 0) < 1) {
+            // An ongoing day only needs evidence up to the latest measurement.
+            // Its unfinished remainder still cannot count towards a completed dry spell.
+            $observedEnd = min($span->end, $this->asOf, $this->reader->last ?? $span->start);
+            $observed = new Span($span->start, max($span->start, $observedEnd));
+            if ($observed->length() > 0 && ($this->stats->weight >= $observed->length()
+                || RainCoverage::dry($this->reader, $observed, $budget, $this->rainCoveredThrough))) {
+                $value = 0.0;
+                $coverage = $observed->length() / $span->length();
+            } else {
+                $value = null;
+            }
+        }
+        if ($spec->observation === 'rain' && (in_array($spec->aggregate, ['sum', 'cumulative'], true) || $spec->analysis === 'spell')
+            && RainCoverage::uncertain($this->reader, $span, $budget)) {
+            $value = null;
+            $coverage = 0.0;
+        }
         if ($coverage !== null && $coverage < $spec->coverage) {
             $value = null;
         }
@@ -428,6 +452,7 @@ final class Computation
 
     private function point(Span $span, int|float|bool|string|Vector|null $value, ?float $coverage): void
     {
+        $this->rainCoveredThrough = null;
         $this->points[] = ['start' => $span->start, 'end' => $span->end, 'value' => $value, 'coverage' => $coverage];
         ++$this->index;
         $this->cursor = null;
@@ -467,7 +492,8 @@ final class Computation
     {
         return json_encode(['measuredAt' => $this->measuredAt, 'asOf' => $this->asOf, 'index' => $this->index, 'cursor' => $this->cursor, 'stats' => $this->stats->save(), 'points' => $this->points,
             'fallback' => $this->fallback, 'fallbackCursor' => $this->fallbackCursor, 'fallbackDone' => $this->fallbackDone,
-            'dailyCursor' => $this->dailyCursor, 'dailyStats' => $this->dailyStats?->save()], JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION);
+            'dailyCursor' => $this->dailyCursor, 'dailyStats' => $this->dailyStats?->save(),
+            'rainCoveredThrough' => $this->rainCoveredThrough], JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION);
     }
 
     public static function restore(string $json, Spec $spec, ArchiveReader $reader): self
@@ -487,6 +513,7 @@ final class Computation
         $work->fallbackDone = ($state['fallbackDone'] ?? false) === true;
         $work->dailyCursor = is_int($state['dailyCursor'] ?? null) ? $state['dailyCursor'] : null;
         $work->dailyStats = is_array($state['dailyStats'] ?? null) ? Accumulator::restore($state['dailyStats']) : null;
+        $work->rainCoveredThrough = is_int($state['rainCoveredThrough'] ?? null) ? $state['rainCoveredThrough'] : null;
         return $work;
     }
 }

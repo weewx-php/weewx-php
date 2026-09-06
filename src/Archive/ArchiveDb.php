@@ -95,6 +95,79 @@ final class ArchiveDb implements History
         $this->db->close();
     }
 
+    /** Inspection must not change journal mode or initialize archive metadata. */
+    public static function readOnly(string $path, Policy $policy, DateTimeZone $zone): self
+    {
+        $db = Sqlite::readOnly($path);
+        try {
+            $archive = new self($db, 'archive', $policy, $zone, false);
+            $archive->schema = Schema::read($db);
+            return $archive;
+        } catch (\Throwable $error) {
+            $db->close();
+            throw $error;
+        }
+    }
+
+    /** For an unpublished import copy only; raw records and unrelated metadata stay intact. */
+    public function resetImportSummaries(): void
+    {
+        $types = $this->schema->dayTypes;
+        if ($types === []) {
+            foreach (Wview::daySummaries() as $name => $kind) {
+                if ($this->schema->hasColumn($name) || ($name === 'wind' && $this->schema->hasColumn('windSpeed'))) {
+                    $types[$name] = $kind;
+                }
+            }
+        }
+        $this->db->transaction(function () use ($types): void {
+            foreach ($types as $name => $kind) {
+                if (preg_match(self::COLUMN_PATTERN, $name) !== 1) {
+                    throw new SchemaError('Invalid daily summary field');
+                }
+                $table = $this->quoted('archive_day_' . $name);
+                $temporary = '_import_day_' . $name;
+                $tables = $this->db->tables();
+                if (in_array('archive_day_' . $name, $tables, true) && !in_array($temporary, $tables, true)) {
+                    // Temporary summaries only, never a second copy of the archive records.
+                    $this->db->exec('ALTER TABLE ' . $table . ' RENAME TO ' . $this->quoted($temporary));
+                } else {
+                    $this->db->exec('DROP TABLE IF EXISTS ' . $table);
+                }
+                $this->createDayTable($name, $kind);
+            }
+            $this->db->exec('CREATE TABLE IF NOT EXISTS archive_day__metadata(name CHAR(20) NOT NULL PRIMARY KEY, value TEXT)');
+            $this->db->exec('INSERT OR REPLACE INTO archive_day__metadata(name,value) VALUES (?, ?)', ['Version', Schema::DAY_SUMMARY_VERSION]);
+            $this->db->exec('DELETE FROM archive_day__metadata WHERE name = ?', ['lastUpdate']);
+        });
+        $this->reloadSchema();
+    }
+
+    public function finishImportRepair(): void
+    {
+        $this->db->transaction(function (): void {
+            foreach ($this->db->tables() as $table) {
+                if (str_starts_with($table, '_import_day_')) {
+                    $this->db->exec('DROP TABLE ' . $this->quoted($table));
+                }
+            }
+        });
+    }
+
+    public static function prepareImportRepair(string $path, DateTimeZone $zone): self
+    {
+        $db = Sqlite::open($path, false, JournalMode::Wal);
+        $archive = new self($db, 'archive', new Policy(), $zone, false);
+        try {
+            $archive->schema = Schema::read($db);
+            $archive->resetImportSummaries();
+            return $archive;
+        } catch (\Throwable $error) {
+            $db->close();
+            throw $error;
+        }
+    }
+
     public function path(): string
     {
         return $this->db->path();
@@ -399,6 +472,21 @@ final class ArchiveDb implements History
     }
 
     // -- writing ----------------------------------------------------------
+
+    /** Gap/reset evidence stays outside WeeWX's observation schema. */
+    public function storeRainEvidence(Built $built): void
+    {
+        if ($built->rainEvidence === [] && !in_array('weewx_rain_evidence', $this->db->tables(), true)) {
+            return;
+        }
+        $this->db->exec('CREATE TABLE IF NOT EXISTS weewx_rain_evidence(archivedAt INTEGER NOT NULL, source TEXT NOT NULL, start INTEGER NOT NULL, stop INTEGER NOT NULL, amount REAL, usUnits INTEGER NOT NULL, status TEXT NOT NULL, counter TEXT NOT NULL, PRIMARY KEY(archivedAt, source, stop))');
+        $this->db->exec('CREATE INDEX IF NOT EXISTS rain_evidence_stop ON weewx_rain_evidence(stop, start)');
+        $this->db->exec('DELETE FROM weewx_rain_evidence WHERE archivedAt = ?', [$built->stop]);
+        foreach ($built->rainEvidence as $reading) {
+            $this->db->exec('INSERT INTO weewx_rain_evidence VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [$built->stop, $reading['source'],
+                $reading['start'], $reading['stop'], $reading['amount'], self::bindable($built->record['usUnits']), $reading['status'], $reading['counter']]);
+        }
+    }
 
     /**
      * Write one archive record and fold it into the daily summaries.

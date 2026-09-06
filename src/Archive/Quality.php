@@ -86,6 +86,13 @@ final class Quality
         if ($system === null) {
             return $record;
         }
+        foreach ($record as $name => $value) {
+            if ((is_int($value) || is_float($value)) && $value < 0
+                && in_array(Units::groupOf($name), ['group_rain', 'group_rainrate'], true)) {
+                $record[$name] = null;
+                $this->dropped[$name] = ($this->dropped[$name] ?? 0) + 1;
+            }
+        }
         foreach ($this->rules as $obsType => $rule) {
             $value = $record[$obsType] ?? null;
             if (!is_int($value) && !is_float($value)) {

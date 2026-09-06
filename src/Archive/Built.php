@@ -14,6 +14,7 @@ final class Built
      * @param Accum $accumulator The interval's LOOP statistics, which sharpen the day's extremes.
      * @param int $packets How many LOOP packets went in.
      * @param bool $fromHardware Whether a console's own archive record is the basis.
+     * @param list<array{start: int, stop: int, amount: float|null, status: string, counter: string, source: string}> $rainEvidence
      * @param array<string, int> $dropped Readings quality control refused, by name and count.
      */
     public function __construct(
@@ -24,5 +25,6 @@ final class Built
         public readonly int $packets,
         public readonly bool $fromHardware,
         public readonly array $dropped,
+        public readonly array $rainEvidence = [],
     ) {}
 }

@@ -50,9 +50,9 @@ final class Store
 
     private function __construct(private readonly Sqlite $db) {}
 
-    public static function open(Settings $settings): self
+    public static function open(Settings $settings, int $busyTimeout = 5000): self
     {
-        $db = Sqlite::open($settings->ingestDbPath(), true, $settings->journalMode);
+        $db = Sqlite::open($settings->ingestDbPath(), true, $settings->journalMode, 'FULL', $busyTimeout);
         $db->exec(self::SCHEMA);
         return new self($db);
     }

@@ -12,11 +12,14 @@ loop_hilo = true                  # whether the packets sharpen a day's highs an
 late_packets = ignore             # or rebuild: build an archived interval again when a packet arrives late
 live_retention = 7d               # how long packets stay in the journal
 raw_retention = 1h                # how long the raw upload stays beside a packet
-time_budget = 20                  # seconds one tick may spend building records
+time_budget = 0                   # automatic host runtime; positive seconds set a ceiling
 max_intervals_per_run = 100       # intervals one archive may build in one tick
 journal_mode = wal                # or delete, on a network file system
 tick_token = "change-me"          # what a call of tick.php has to carry; without one, every call is refused
+visit_tick_enabled = true         # page loads can trigger a background tick, at most once per minute
 log_level = info                  # debug, info, warning or error
+backup_enabled = true             # full installation backup once per day
+backup_retention_days = 3          # retain successful backups for this many days
 
 # HTTP push reception. Run `ingest endpoints`, point the console here, then
 # `ingest list` and `ingest adopt <sender>`. No station needs creating first.
@@ -143,3 +146,26 @@ log_level = info                  # debug, info, warning or error
         location = kirchdorf      # the tag every point carries; one per archive
         unit_system = METRICWX    # what a Grafana axis shows; pick it once
         catch_up = 5000
+
+# Optional local packages. Paths are relative to this configuration file.
+# Install via Admin > Extensions, or copy a package and configure it manually.
+# See docs/extensions.md and https://github.com/weewx-php/extension-climate.
+# [Extensions]
+#     [[climate]]
+#         enabled = true
+#         entry = extensions/climate/extension.php
+#         [[[options]]]
+#             archives = kirchdorf
+#             start_year = 1991
+#             end_year = 2020
+#             window_days = 5      # +/- calendar days; 0 disables smoothing
+#             timeout = 8
+#             api_key = ""        # customer endpoint when set; Free API is non-commercial
+
+# The core ships only the live-data basic theme. Optional packages: docs/themes.md.
+[Themes]
+    active = basic
+    units = metric                  # display default: metric, us or metricwx
+#    [[demo]]
+#        directory = themes/demo
+#        default_range = 24h

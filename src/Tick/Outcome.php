@@ -13,10 +13,13 @@ final class Outcome
 
     /**
      * @param string $status `ok`, `busy` when another tick held the lock, `error` when an
-     *     archive failed; the others were still done.
+     *     archive, backup or maintenance job failed; independent work is still done.
      * @param array<string, array<string, mixed>> $archives Per archive: `records` written, or `error`.
      * @param array<string, array<string, mixed>> $stations Per station: `status`, `last_seen`, `since`.
      * @param array<string, array<string, mixed>> $uploads Per upload: `sent`, or `skipped`, `blocked` or `error`.
+     * @param array<string, int|string> $backup Latest full backup result.
+     * @param array<string, int> $analytics Completed, pending, failed and busy analysis work.
+     * @param array<string, array<string, int|string>> $extensions Independent extension work.
      */
     public function __construct(
         public readonly string $status,
@@ -24,6 +27,10 @@ final class Outcome
         public readonly array $stations,
         public readonly int $durationMs,
         public readonly array $uploads = [],
+        public readonly array $backup = [],
+        public readonly bool $maintenanceOk = true,
+        public readonly array $analytics = [],
+        public readonly array $extensions = [],
     ) {}
 
     public static function busy(int $durationMs): self
@@ -40,6 +47,10 @@ final class Outcome
             'uploads' => $this->uploads,
             'stations' => $this->stations,
             'duration_ms' => $this->durationMs,
+            'backup' => $this->backup,
+            'analytics' => $this->analytics,
+            'extensions' => $this->extensions,
+            'maintenance' => ['status' => $this->maintenanceOk ? 'ok' : 'error'],
         ];
     }
 }

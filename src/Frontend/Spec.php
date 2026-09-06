@@ -99,7 +99,7 @@ final class Spec
     public function json(): string
     {
         $this->validate();
-        return json_encode(get_object_vars($this), JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION);
+        return CacheJson::encode(get_object_vars($this), JSON_PRESERVE_ZERO_FRACTION);
     }
 
     public static function fromJson(string $json): self

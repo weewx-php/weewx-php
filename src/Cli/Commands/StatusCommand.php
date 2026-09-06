@@ -44,6 +44,11 @@ final class StatusCommand implements Command
 
         $console->line(sprintf('weewx-php status at %s %s', Console::when($now, $config->settings->timezone), $config->settings->timezone->getName()));
         $console->line(sprintf('journal: %d packet(s), %s', $live->count(), self::span($live->span(), $config->settings)));
+        $backup = (new \WeewxPhp\Backup\Backups($config->settings))->status();
+        $console->line(sprintf('backup: %s, last success %s', $backup['status'], Console::when($backup['completed'] > 0 ? $backup['completed'] : null, $config->settings->timezone)));
+        foreach (\WeewxPhp\Backup\Health::warnings($config, $now) as $warning) {
+            $console->line('warning: ' . (new \WeewxPhp\Admin\Translator())->text($warning));
+        }
         $console->line();
         $console->line('Archives');
         foreach ($config->archives as $id => $archive) {

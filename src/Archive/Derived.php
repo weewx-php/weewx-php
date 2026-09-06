@@ -27,16 +27,9 @@ use WeewxPhp\Weewx\UnitSystem;
  * for it, and so does this: an archive record then carries the column, and
  * the daily summary a row for it, as WeeWX's would.
  *
- * Two departures from WeeWX, both taken from weewx-evo. `rain` comes from
- * whichever of three running totals the console sends rather than from one
- * named in the configuration, and a total that fell is a reset whose new
- * value is the amount, where WeeWX books nothing. And the rain rate's
- * quarter hour is seeded from the packets before the interval, not from
- * the archive: those packets are what WeeWX itself would have seen had it
- * been running. WeeWX would also take one more counter delta on the
- * finished record; that only differs when an interval's first packet has
- * no predecessor at all, which the run-up leaves to the journal's very
- * first packet.
+ * Rain uses the longest available counter of the selected gauge. Falling
+ * counters rebase; another continuous counter may bridge their reset.
+ * Counter gaps are retained as evidence, not interpreted as rain rate.
  *
  * One of these per interval built. What it carries between packets -- the
  * last value of each counter, the rain of the last quarter hour, the
@@ -62,10 +55,12 @@ final class Derived
     public const ATC = 0.8;
 
     /** Running totals `rain` is taken from, best first: weewx-evo's list. */
-    public const COUNTERS = ['dayRain', 'totalRain', 'eventRain'];
+    public const COUNTERS = RainCounter::FIELDS;
 
-    /** @var array<string, array<string, float>> Per sender, the last value of each counter. */
-    private array $totals = [];
+    private RainCounter $rainCounter;
+    /** @var list<array{start: int, stop: int, amount: float|null, status: string, counter: string, source: string}> */
+    private array $rainEvidence = [];
+    private bool $recoveredRain = false;
 
     /** @var list<array{0: int, 1: float}> When it rained and how much, for the last quarter hour. */
     private array $rainEvents = [];
@@ -82,7 +77,9 @@ final class Derived
         private readonly Site $site,
         private readonly History $history,
         private readonly array $how,
-    ) {}
+    ) {
+        $this->rainCounter = new RainCounter($site->zone);
+    }
 
     public static function fromConfig(ArchiveConfig $config, History $history): self
     {
@@ -94,10 +91,11 @@ final class Derived
      * remembered, nothing is derived.
      *
      * @param array<string, mixed> $record A placed packet in the archive's unit system.
+     * @param array<string, mixed>|null $counters
      */
-    public function seed(array $record, string $sender): void
+    public function seed(array $record, string $sender, ?array $counters = null): void
     {
-        $this->noteRain($this->rainFromCounters($record, $sender));
+        $this->noteRain($this->rainFromCounters($record, $sender, $counters));
     }
 
     /**
@@ -106,10 +104,11 @@ final class Derived
      * @param array<string, mixed> $record A placed packet in the archive's unit system.
      *
      * @return array<string, mixed>
+     * @param array<string, mixed>|null $counters
      */
-    public function applyPacket(array $record, string $sender): array
+    public function applyPacket(array $record, string $sender, ?array $counters = null): array
     {
-        $record = $this->derive($this->rainFromCounters($record, $sender));
+        $record = $this->derive($this->rainFromCounters($record, $sender, $counters, true));
         // WeeWX's rain rater sees a packet after the calculations: the rate
         // in a packet is worked out from the rain before it.
         $this->noteRain($record);
@@ -197,27 +196,29 @@ final class Derived
      * @param array<string, mixed> $record
      *
      * @return array<string, mixed>
+     * @param array<string, mixed>|null $counters
      */
-    private function rainFromCounters(array $record, string $sender): array
+    private function rainFromCounters(array $record, string $sender, ?array $counters, bool $collect = false): array
     {
-        $wanted = $this->wants('rain', $record);
-        foreach (self::COUNTERS as $counter) {
-            $total = self::number($record[$counter] ?? null);
-            if ($total === null) {
-                continue;
-            }
-            $before = $this->totals[$sender][$counter] ?? null;
-            $this->totals[$sender][$counter] = $total;
-            if (!$wanted) {
-                continue;
-            }
-            $delta = Formulas::delta($total, $before);
-            if ($delta !== null) {
-                $record['rain'] = $delta;
-            }
-            break;
+        $hardware = !$this->wants('rain', $record);
+        $counters ??= array_intersect_key($record, array_flip(self::COUNTERS));
+        $ordered = array_replace(array_intersect_key(array_fill_keys(self::COUNTERS, null), $counters), $counters);
+        $reading = $this->rainCounter->read($sender, self::timestamp($record), $ordered, $hardware);
+        $this->recoveredRain = !$hardware && $reading['stop'] - $reading['start'] > self::RAIN_PERIOD;
+        if (!$hardware && $reading['amount'] !== null) {
+            $record['rain'] = $reading['amount'];
+        }
+        if ($collect && !$hardware && $reading['status'] !== 'absent' && $reading['start'] < $reading['stop']) {
+            $this->rainEvidence[] = $reading + ['source' => $sender];
         }
         return $record;
+    }
+
+    /** @return list<array{start: int, stop: int, amount: float|null, status: string, counter: string, source: string}> */
+    public function rainEvidence(int $interval): array
+    {
+        return array_values(array_filter($this->rainEvidence, static fn(array $reading): bool =>
+            $reading['stop'] - $reading['start'] > $interval || $reading['status'] !== 'complete'));
     }
 
     /**
@@ -229,7 +230,7 @@ final class Derived
     private function noteRain(array $record): void
     {
         $rain = self::number($record['rain'] ?? null);
-        if ($rain === null || $rain === 0.0) {
+        if ($rain === null || $rain <= 0.0 || $this->recoveredRain) {
             return;
         }
         $when = self::timestamp($record);
@@ -247,6 +248,9 @@ final class Derived
      */
     private function rainRate(array $record): array
     {
+        if ($this->recoveredRain) {
+            return self::cannot($record, 'rainRate');
+        }
         $when = self::timestamp($record);
         $sum = 0.0;
         foreach ($this->rainEvents as [$at, $rain]) {

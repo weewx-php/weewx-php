@@ -32,6 +32,7 @@ use WeewxPhp\Upload\Uploads;
 final class Runtime
 {
     private ?LiveDb $live = null;
+    private int $ingestWait = 5000;
 
     private ?Store $ingest = null;
 
@@ -98,6 +99,12 @@ final class Runtime
         return new self($config, $clock, $log, $http, $sockets);
     }
 
+    /** Original configuration path, required for full installation backups. */
+    public function configPath(): ?string
+    {
+        return $this->configPath;
+    }
+
     /** The uploads as configured, over the state and the transports of this runtime. */
     public function uploads(): Uploads
     {
@@ -106,11 +113,25 @@ final class Runtime
         return new Uploads($this->config, $this->state(), $this->log, $this->http, $this->sockets);
     }
 
+    /** @return array<string, array<string, int|string>> */
+    public function extensions(\WeewxPhp\Archive\Budget $budget): array
+    {
+        $this->ensureDataDir();
+        $this->http ??= Http::client();
+        return (new \WeewxPhp\Extension\Registry($this->config))->run($budget, $this->clock->now(), $this->http, $this->log);
+    }
+
+    /** HTTP intake never waits on another SQLite writer; failed persistence is not acknowledged. */
+    public function nonBlockingIngest(): void
+    {
+        $this->ingestWait = 0;
+    }
+
     public function live(): LiveDb
     {
         if ($this->live === null) {
             $this->ensureDataDir();
-            $this->live = LiveDb::open($this->config->settings->liveDbPath(), $this->config->settings->journalMode);
+            $this->live = LiveDb::open($this->config->settings->liveDbPath(), $this->config->settings->journalMode, $this->ingestWait);
         }
         return $this->live;
     }
@@ -119,7 +140,7 @@ final class Runtime
     {
         if ($this->ingest === null) {
             $this->ensureDataDir();
-            $this->ingest = Store::open($this->config->settings);
+            $this->ingest = Store::open($this->config->settings, $this->ingestWait);
         }
         return $this->ingest;
     }

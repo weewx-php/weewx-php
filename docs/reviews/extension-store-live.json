@@ -1,0 +1,21 @@
+{
+    "tested_at_utc": "2026-09-06T15:22:16+00:00",
+    "php": "8.5.1",
+    "catalog_url": "https://raw.githubusercontent.com/weewx-php/extension-catalog/main/catalog.json",
+    "repository": "weewx-php/extension-climate",
+    "commit": "22f61419a795ab46ae2d98fedbf1ae4682ba6891",
+    "version": "0.1.0",
+    "verified_files": 10,
+    "install_and_activate_seconds": 0.816,
+    "memory_peak_bytes": 4194304,
+    "extension_step": {
+        "climate/sydney": {
+            "status": "pending",
+            "years_loaded": 1,
+            "years_total": 30
+        }
+    },
+    "theme_status": "pending",
+    "measured_archive_created": false,
+    "scope": "Fresh isolated local PHP installation; real GitHub and Open-Meteo HTTPS with TLS verification. No target shared host accessed."
+}

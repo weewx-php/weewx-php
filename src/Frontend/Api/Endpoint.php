@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace WeewxPhp\Frontend\Api;
 
 use Throwable;
+use WeewxPhp\Frontend\UnitPreferences;
 
 final class Endpoint
 {
@@ -23,9 +24,14 @@ final class Endpoint
             return new Response(405, $headers + ['Allow' => 'GET, HEAD, OPTIONS'], '{"version":1,"error":"method_not_allowed"}');
         }
         $id = $query['feed'] ?? null;
-        if (!is_string($id) || preg_match('/^[a-z][a-z0-9_-]{0,47}$/D', $id) !== 1 || array_diff(array_keys($query), ['feed', 'fields']) !== []) {
+        if (!is_string($id) || preg_match('/^[a-z][a-z0-9_-]{0,47}$/D', $id) !== 1 || array_diff(array_keys($query), ['feed', 'fields', 'units']) !== []) {
             return $error(400, 'invalid_query');
         }
+        $profile = $query['units'] ?? null;
+        if (array_key_exists('units', $query) && (!is_string($profile) || !isset(UnitPreferences::PROFILES[$profile]))) {
+            return $error(400, 'invalid_units');
+        }
+        $units = is_string($profile) ? new UnitPreferences($profile) : null;
         $feed = $this->feeds[$id] ?? null;
         if ($feed === null) {
             return $error(404, 'unknown_feed');
@@ -63,7 +69,7 @@ final class Endpoint
                 'Access-Control-Allow-Headers' => 'If-None-Match', 'Access-Control-Max-Age' => '600']);
         }
         try {
-            $body = json_encode($feed->snapshot($id, $fields), JSON_THROW_ON_ERROR | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+            $body = json_encode($feed->snapshot($id, $fields, $units), JSON_THROW_ON_ERROR | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
             if (strlen($body) > 1048576) {
                 throw new \RuntimeException('Feed exceeds 1 MiB');
             }

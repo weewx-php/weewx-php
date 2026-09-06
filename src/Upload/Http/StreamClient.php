@@ -30,7 +30,7 @@ final class StreamClient implements HttpClient
             $options['content'] = $request->body;
         }
         $context = stream_context_create(['http' => $options]);
-        $body = @file_get_contents($request->url, false, $context);
+        $body = @file_get_contents($request->url, false, $context, 0, $request->maxResponseBytes === null ? null : max(1, $request->maxResponseBytes + 1));
         if ($body === false) {
             $error = error_get_last();
             $message = $error === null ? 'no answer' : $error['message'];
@@ -40,6 +40,9 @@ final class StreamClient implements HttpClient
             );
         }
         $status = 0;
+        if ($request->maxResponseBytes !== null && strlen($body) > $request->maxResponseBytes) {
+            throw new Rejected('HTTP response too large');
+        }
         // Set by the wrapper beside the body; the first line carries the status.
         $statusLine = $http_response_header[0] ?? '';
         if (preg_match('#^HTTP/\S+\s+(\d{3})#', $statusLine, $found) === 1) {

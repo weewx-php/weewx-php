@@ -9,6 +9,12 @@ or from the file `--config` or the environment variable `WEEWX_PHP_CONF`
 names. Exit status 0 when the command did what it says, 1 when something
 in the installation stopped it, 2 when the command line was wrong.
 
+## extensions
+
+`extensions tags` lists registered theme tags. `extensions run` performs one
+bounded worker step per enabled package and archive. The existing Tick normally
+runs these workers automatically. See [Extensions](extensions.md).
+
 ## ingest
 
 Local administration of HTTP push reception; no admin UI is required.
@@ -44,12 +50,25 @@ installed; `since` identifies their start.
 Builds every interval that is due for every archive within the time
 budget, walks the journal in full when that has not been done for an
 hour, judges the stations' silence, and every ten minutes lets packets
-older than `live_retention` go. Prints what `tick.php` would answer.
-Exit status 1 when an archive failed; the others are still done.
+older than `live_retention` go. Prints the completed CLI outcome.
+Exit status 1 when an archive, maintenance job or full backup failed; independent
+work is still done. Daily full backups and retention are described in
+[backup and restore](backups.md).
 
-`tick.php` in `public/` does the same for a call from outside, with
-`?token=` or the header `X-Tick-Token` matching `tick_token`, and answers
-200 for `ok`, 503 for `busy` and 500 for `error`.
+`tick.php` authenticates `?token=` or `X-Tick-Token` against `tick_token`
+and returns **202** after placing durable wakeups. It never runs archive,
+analysis, maintenance or network jobs inline, including on hosts without
+FastCGI. Separate CLI processes own `archive`, `analytics`, `services` and
+`maintenance` lanes. Repeated requests coalesce; a nonblocking lane lock
+prevents concurrent execution of the same lane.
+
+The response's `launcher` is `background` when detached POSIX PHP CLI
+launching is available, otherwise `external-required`. There is no synchronous
+fallback. In that case cron must run the CLI `tick` command, or the queued
+lanes individually with `php bin/worker.php /absolute/weather.conf archive`
+(and `analytics`, `services`, `maintenance`). CLI `tick` remains synchronous
+for cron and administrative use. A durable claim survives interruption and
+is resumed by a subsequent packet, visit or scheduled trigger.
 
 ## status
 
@@ -95,9 +114,20 @@ next tick.
 
 ## backup \<archive\> \<target file\>
 
+With no arguments, `backup` creates a full installation TAR immediately and
+prints its path. This also works when daily scheduling is disabled. Retention
+is applied after successful creation. See [backup and restore](backups.md).
+
 Copies the database with SQLite's online backup, which reads through the
 write-ahead log; a `cp` of a database in WAL mode does not. Refuses a
 target that exists.
+
+## restore \<backup.tar\> \<new directory\>
+
+Validates a full package and restores into a new private directory. Existing
+targets are refused. Does not require the current configuration to exist.
+Prints the recovered configuration path; activation is a separate operation.
+See [backup and restore](backups.md) for the recovery procedure.
 
 ## verify \<archive\>
 
@@ -141,3 +171,14 @@ station metadata to archive configuration. `collector block <collector> <station
 stops new observations without deleting history. `collector rotate <collector>`
 replaces its token; `collector disable|enable <collector>` changes access while
 preserving identity. See [native ingest](native-ingest.md) for the full contract.
+
+## extensions tags / extensions run
+
+`extensions tags` lists the namespaced tags registered by enabled packages.
+`extensions run` advances one bounded background step per enabled archive, using
+per-package locks and the configured time budget. This is an optional manual
+command: extensions register their worker with the normal tick, including
+visitor-triggered ticks, and need no separate cron job. Failures are logged and
+returned as extension status without stopping core archive processing. See
+[extensions](extensions.md) and the
+[climate package](https://github.com/weewx-php/extension-climate).

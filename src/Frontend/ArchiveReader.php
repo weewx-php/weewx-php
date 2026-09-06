@@ -28,6 +28,7 @@ final class ArchiveReader implements History
     public readonly UnitSystem $units;
     public readonly int $dailyThrough;
     public readonly bool $hardware;
+    public readonly bool $rainEvidence;
     /** @var array<string, true> */
     private array $checkedDaily = [];
 
@@ -56,7 +57,12 @@ final class ArchiveReader implements History
         $daily = [];
         $hasMetadata = false;
         $hardware = false;
-        foreach ($this->rows("SELECT name FROM sqlite_master WHERE type = 'table' AND (name GLOB 'archive_day_*' OR name = 'weewx_hardware')", [], $budget) as $row) {
+        $rainEvidence = false;
+        foreach ($this->rows("SELECT name FROM sqlite_master WHERE type = 'table' AND (name GLOB 'archive_day_*' OR name IN ('weewx_hardware', 'weewx_rain_evidence'))", [], $budget) as $row) {
+            if ($row['name'] === 'weewx_rain_evidence') {
+                $rainEvidence = true;
+                continue;
+            }
             if ($row['name'] === 'weewx_hardware') {
                 $hardware = true;
                 continue;
@@ -70,6 +76,7 @@ final class ArchiveReader implements History
         }
         $this->daily = $daily;
         $this->hardware = $hardware;
+        $this->rainEvidence = $rainEvidence;
         $first = $this->one('SELECT dateTime, usUnits FROM archive ORDER BY dateTime ASC LIMIT 1', [], $budget);
         $last = $this->one('SELECT dateTime FROM archive ORDER BY dateTime DESC LIMIT 1', [], $budget);
         $archiveLast = is_int($last['dateTime'] ?? null) ? $last['dateTime'] : 0;

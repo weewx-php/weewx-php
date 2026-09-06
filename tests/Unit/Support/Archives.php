@@ -79,6 +79,7 @@ final class Archives
         string $timezone = 'Europe/Berlin',
         string $database = '/nowhere/kirchdorf.sdb',
         string $id = 'kirchdorf',
+        bool $explicitMapping = false,
     ): ArchiveConfig {
         return new ArchiveConfig(
             id: $id,
@@ -101,6 +102,7 @@ final class Archives
             qcUnitSystem: $qcUnitSystem,
             qc: $qc,
             calibrate: $calibrate,
+            explicitMapping: $explicitMapping,
         );
     }
 }

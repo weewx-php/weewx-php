@@ -16,9 +16,11 @@ final class Settings
      * @param int $archiveDelay Seconds an interval is held back after it ends.
      * @param int $liveRetention Seconds a packet stays in the live journal.
      * @param int $rawRetention Seconds the raw upload stays beside a packet.
-     * @param int $timeBudget Seconds one tick may spend.
+     * @param int $timeBudget Runtime ceiling in seconds; zero learns the host runtime automatically.
      * @param int $maxIntervalsPerRun How many intervals one archive may build per tick.
      * @param string|null $tickToken What an HTTP call of tick.php has to carry; null refuses them all.
+     * @param bool $backupEnabled Create a full backup on the first tick of each local day.
+     * @param int $backupRetentionDays Retain completed packages for this many elapsed days.
      */
     public function __construct(
         public readonly string $dataDir,
@@ -34,6 +36,9 @@ final class Settings
         public readonly JournalMode $journalMode,
         public readonly ?string $tickToken,
         public readonly LogLevel $logLevel,
+        public readonly bool $backupEnabled = true,
+        public readonly int $backupRetentionDays = 3,
+        public readonly bool $visitTickEnabled = true,
     ) {}
 
     public function liveDbPath(): string

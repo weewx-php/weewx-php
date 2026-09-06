@@ -12,4 +12,4 @@ use WeewxPhp\Cli\Console;
 
 require dirname(__DIR__) . '/src/autoload.php';
 
-exit((new Application(new Console()))->run(array_slice($argv, 1)));
+exit((new Application(new Console()))->run(array_slice($argv ?? [], 1)));

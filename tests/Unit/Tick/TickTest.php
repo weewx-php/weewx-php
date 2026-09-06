@@ -94,6 +94,26 @@ final class TickTest extends TestCase
         $runtime->close();
     }
 
+    public function testActiveAnalysisDoesNotPreventTheStationTickFromArchiving(): void
+    {
+        $runtime = $this->runtime([$this->kirchdorf()]);
+        $this->add($runtime, self::T0 + 10, ['outTemp' => 10.0]);
+        $analysis = Lock::tryAcquire($runtime->config->settings->dataDir . '/analytics.lock');
+        self::assertNotNull($analysis);
+        $cache = new \WeewxPhp\Frontend\Cache($runtime->config->settings);
+        try {
+            $outcome = (new Tick($runtime))->run('ingest');
+            self::assertSame(Outcome::OK, $outcome->status);
+            self::assertSame(1, $outcome->archives['kirchdorf']['records']);
+            self::assertSame(1, $outcome->analytics['busy']);
+            self::assertSame(0, $outcome->analytics['failed']);
+        } finally {
+            $cache->close();
+            $analysis->release();
+            $runtime->close();
+        }
+    }
+
     public function testOneArchivesFailureLeavesTheOthersDone(): void
     {
         $runtime = $this->runtime([$this->kirchdorf(), $this->shed()]);

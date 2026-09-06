@@ -199,9 +199,14 @@ final class Archiver
         // counters and the rain rate start where WeeWX's would. Its refusals
         // belong to intervals built already and are not counted again.
         $runUp = Quality::fromConfig($this->config);
-        $last = $this->live->lastBefore($start - self::RUN_UP, PacketKind::Loop, $senders);
-        if ($last !== null) {
-            $this->seed($derived, $runUp, $last, $units);
+        foreach ($this->live->senders() as $identity) {
+            if (!$this->config->selects($identity->sender)) {
+                continue;
+            }
+            $last = $this->live->lastBefore($start - self::RUN_UP, PacketKind::Loop, [$identity->sender]);
+            if ($last !== null) {
+                $this->seed($derived, $runUp, $last, $units);
+            }
         }
         foreach ($this->live->packets($start - self::RUN_UP, $start, PacketKind::Loop, $senders) as $packet) {
             $this->seed($derived, $runUp, $packet, $units);
@@ -226,7 +231,7 @@ final class Archiver
             }
             // Derived per packet, before accumulating: the dew point of an
             // average hour is not a thing that happened.
-            $accum->addRecord($derived->applyPacket($record, $packet->sender), $this->settings->loopHilo, 1);
+            $accum->addRecord($derived->applyPacket($record, $packet->sender, $this->rainInputs($quality, $packet, $units)), $this->settings->loopHilo, 1);
             ++$packets;
         }
         $hardware = Hardware::aggregate($start, $stop, $hardwareInputs, $this->policy);
@@ -252,7 +257,7 @@ final class Archiver
         if ($quality->dropped() !== []) {
             $this->log->info(sprintf('%s: interval ending %d refused %s', $this->config->id, $stop, $quality->summary()));
         }
-        return new Built($stop, $seconds, $record, $accum, $packets, $hardware !== [], $quality->dropped());
+        return new Built($stop, $seconds, $record, $accum, $packets, $hardware !== [], $quality->dropped(), $derived->rainEvidence($seconds));
     }
 
     /** Copy hardware input before releasing journal holds, even when no fixed-grid record can be built. */
@@ -334,15 +339,26 @@ final class Archiver
             return null;
         }
         $record = $this->sound(Quality::fromConfig($this->config), $last, $units);
-        return $record === null ? null : $derived->applyPacket($record, $last->sender);
+        return $record === null ? null : $derived->applyPacket($record, $last->sender, $this->rainInputs(Quality::fromConfig($this->config), $last, $units));
     }
 
     private function seed(Derived $derived, Quality $quality, Packet $packet, UnitSystem $units): void
     {
         $record = $this->sound($quality, $packet, $units);
         if ($record !== null) {
-            $derived->seed($record, $packet->sender);
+            $derived->seed($record, $packet->sender, $this->rainInputs($quality, $packet, $units));
         }
+    }
+
+    /** @return array<string, mixed> */
+    private function rainInputs(Quality $quality, Packet $packet, UnitSystem $units): array
+    {
+        $inputs = $this->mapping->rainInputs($packet);
+        $inputs['usUnits'] = $packet->unitSystem->value;
+        $inputs = Units::toSystem($inputs, $units, $this->config->groups());
+        $inputs = $quality->check($quality->calibrate($inputs, $packet->sender));
+        unset($inputs['usUnits']);
+        return $inputs;
     }
 
     /**
@@ -396,12 +412,17 @@ final class Archiver
      */
     public function store(Built $built, bool $replace = false): bool
     {
-        $this->changes?->before($built->stop - $this->config->interval($this->settings), $built->stop);
+        $from = $built->stop - $built->seconds;
+        foreach ($built->rainEvidence as $evidence) {
+            $from = min($from, $evidence['start']);
+        }
+        $this->changes?->before($from, $built->stop);
         try {
             $written = $this->archive->transaction(function () use ($built, $replace): bool {
                 if (!$this->archive->addRecord($built->record, $replace)) {
                     return false;
                 }
+                $this->archive->storeRainEvidence($built);
                 if ($this->settings->loopHilo && $built->packets > 0) {
                     $this->sharpenDay($built);
                 }
@@ -410,7 +431,7 @@ final class Archiver
             $this->sayHomeless();
             return $written;
         } finally {
-            $this->changes?->after($built->stop - $this->config->interval($this->settings), $built->stop);
+            $this->changes?->after($from, $built->stop);
         }
     }
 
@@ -467,10 +488,10 @@ final class Archiver
      * @param bool $replace Whether an interval that is archived already is built again for a
      *     late packet. Otherwise the mark is cleared and the record left alone.
      */
-    public function processDue(int $now, Budget $budget, bool $replace = false): int
+    public function processDue(int $now, Budget $budget, bool $replace = false, int $minStop = 0): int
     {
         $done = 0;
-        foreach ($this->live->due($now, $this->settings->archiveDelay, $this->config->id) as ['stop' => $stop, 'seconds' => $seconds]) {
+        foreach ($this->live->due($now, $this->settings->archiveDelay, $this->config->id, $minStop) as ['stop' => $stop, 'seconds' => $seconds]) {
             if (!$budget->allows()) {
                 // The mark stays; the next tick takes the interval up.
                 break;

@@ -19,6 +19,21 @@ final class MappingTest extends TestCase
 {
     private const T0 = 1_787_734_200;
 
+    public function testAmbiguousGaugeSnapshotsAreNeverCombinedIntoRain(): void
+    {
+        $config = Archives::config(fields: ['ecowitt' => ['dayRain' => 'dayRain'], 'dwd' => ['monthRain' => 'monthRain']]);
+        $mapping = new Mapping($config, 'ecowitt');
+        self::assertSame([], $mapping->rainSources('ecowitt'));
+        self::assertSame([], $mapping->rainSources('dwd'));
+        $chosen = new Mapping(Archives::config(fields: ['ecowitt' => ['yearRain' => 'rain'], 'dwd' => ['monthRain' => 'monthRain']]), 'ecowitt');
+        self::assertContains('yearRain', $chosen->rainSources('ecowitt'));
+        self::assertSame([], $chosen->rainSources('dwd'));
+        $placed = $chosen->place($this->packet('ecowitt', ['yearRain' => 200]));
+        self::assertNotNull($placed);
+        self::assertArrayHasKey('rain', $placed);
+        self::assertNull($placed['rain']);
+    }
+
     public function testThePrimaryIsPlacedByNameWithFieldsMovingAndDroppingReadings(): void
     {
         $mapping = new Mapping(Archives::config(fields: ['ecowitt' => ['inTemp' => '-', 'tf_ch1' => 'soilTemp1']]), 'ecowitt');

@@ -27,6 +27,7 @@ use WeewxPhp\Tick\Runtime;
 use WeewxPhp\Tick\Tick;
 use WeewxPhp\Time\FixedClock;
 use WeewxPhp\Weewx\Policy;
+use WeewxPhp\Weewx\UnitSystem;
 
 final class AdminTest extends TestCase
 {
@@ -294,9 +295,9 @@ final class AdminTest extends TestCase
         $registry = new ThemeRegistry($this->dir . '/themes');
         self::assertSame(['show_wind' => 'false', 'days' => '4'], $registry->validate('example', ['show_wind' => 'false', 'days' => '4'], Config::load($this->path)));
         $de = new Translator('de');
-        self::assertSame('Felder', $de->text('nav.fields'));
+        self::assertSame('Messwerte', $de->text('nav.fields'));
         self::assertSame('2 Felder', $de->text('count.fields', count: 2));
-        self::assertSame('Fields', (new Translator('missing'))->text('nav.fields'));
+        self::assertSame('Measurements', (new Translator('missing'))->text('nav.fields'));
         $this->expectException(Problem::class);
         $registry->validate('example', ['days' => '100'], Config::load($this->path));
     }
@@ -304,6 +305,11 @@ final class AdminTest extends TestCase
     public function testPathTraversalAndDuplicateDatabaseAreRejected(): void
     {
         $this->archive();
+        $archive = Config::load($this->path)->archive('garden');
+        self::assertNotNull($archive);
+        $db = Sqlite::open($archive->database, false, Config::load($this->path)->settings->journalMode);
+        $db->exec('INSERT INTO archive(dateTime, usUnits, interval) VALUES (?, 17, 5)', [self::NOW]);
+        $db->close();
         try {
             DatabasePath::resolve($this->dir, '../escape.sdb');
             self::fail('Traversal accepted');
@@ -311,6 +317,7 @@ final class AdminTest extends TestCase
             self::assertSame('error.path', $error->getMessage());
         }
         $this->expectException(Problem::class);
+        $this->expectExceptionMessage('error.duplicate_database');
         $this->command('archive.connect', ['archive' => 'duplicate', 'database' => 'archives/garden.sdb', 'name' => 'Duplicate', 'unit_system' => 'METRICWX', 'timezone' => 'UTC', 'archive_interval' => '300']);
     }
 
@@ -321,6 +328,56 @@ final class AdminTest extends TestCase
         $html = (new Page($read, new Translator(), 'csrf'))->render('overview', []);
         self::assertStringContainsString('missing', $html);
         self::assertFileDoesNotExist($this->dir . '/archives/missing.sdb');
+    }
+
+    public function testApprovedStationCanHaveStaleReception(): void
+    {
+        $station = $this->upload(str_repeat('A', 32), self::NOW, 'humidity=70');
+        $this->command('station.adopt', ['station' => $station, 'name' => 'Garden']);
+        $read = new ReadModel($this->path);
+        $fresh = (new Page($read, new Translator(), 'csrf', now: self::NOW + 900))->render('stations', []);
+        self::assertStringContainsString('Up to date', $fresh);
+        $stale = (new Page($read, new Translator(), 'csrf', now: self::NOW + 901))->render('stations', []);
+        self::assertStringContainsString((new Translator())->text('status.adopted'), $stale);
+        self::assertStringContainsString('No recent data', $stale);
+        self::assertStringNotContainsString('Up to date', $stale);
+    }
+
+    public function testEmptyDashboardHasSetupActionWithoutClaimingReception(): void
+    {
+        $html = (new Page(new ReadModel($this->path), new Translator('de'), 'csrf', now: self::NOW))->render('overview', []);
+        self::assertStringContainsString('Noch keine Station verbunden', $html);
+        self::assertStringContainsString('Einrichtung fortsetzen', $html);
+        self::assertStringNotContainsString('Deine Wetterdaten kommen an', $html);
+        $dom = new DOMDocument();
+        @$dom->loadHTML($html);
+        $links = (new DOMXPath($dom))->query('//nav[@id="admin-navigation"]/a');
+        self::assertNotFalse($links);
+        foreach ($links as $link) {
+            self::assertInstanceOf(\DOMElement::class, $link);
+            self::assertStringContainsString('lang=de', $link->getAttribute('href'));
+        }
+    }
+
+    public function testBackupRequestReportsQueuedAndKeepsLanguage(): void
+    {
+        $auth = new Auth(Config::load($this->path)->settings);
+        try {
+            $auth->setPassword('correct horse battery staple', self::NOW);
+            $anonymous = $auth->session(null, self::NOW);
+            $session = $auth->login($anonymous['token'], $anonymous['csrf'], 'correct horse battery staple', '127.0.0.1', self::NOW);
+            $response = (new Controller($this->path, self::NOW))->handle('POST', ['page' => 'backups', 'lang' => 'de'], ['action' => 'backup.create', 'csrf' => $session['csrf']], $session['token'], '127.0.0.1', true);
+            self::assertSame(303, $response->status);
+            self::assertNotNull($response->location);
+            parse_str((string) parse_url($response->location, PHP_URL_QUERY), $query);
+            self::assertSame('queued', $query['result']);
+            self::assertSame('de', $query['lang']);
+            $html = (new Page(new ReadModel($this->path), new Translator('de'), 'csrf'))->render('backups', ['saved' => '1', 'result' => 'queued']);
+            self::assertStringContainsString('Aufgabe vorgemerkt.', $html);
+            self::assertStringNotContainsString('Sicherung erstellt.', $html);
+        } finally {
+            $auth->close();
+        }
     }
 
     public function testArchiveWideSaveCreatesColumnsAndDefinesUnknownSourceAtomically(): void
@@ -462,15 +519,82 @@ final class AdminTest extends TestCase
         $read = new ReadModel($this->path);
         $archive = $read->config->archive('garden');
         self::assertNotNull($archive);
-        $foreign = $this->dir . '/foreign.sdb';
-        copy($archive->database, $foreign);
-        $hash = hash_file('sha256', $foreign);
-        $this->command('archive.connect', ['archive' => 'existing', 'name' => 'Existing', 'database' => 'foreign.sdb', 'unit_system' => 'METRICWX', 'timezone' => 'UTC', 'archive_interval' => '300']);
-        self::assertSame($hash, hash_file('sha256', $foreign));
-        $connected = Config::load($this->path)->archive('existing');
-        self::assertNotNull($connected);
-        self::assertFalse($connected->enabled);
-        self::assertSame([], $connected->senders);
+        foreach (UnitSystem::cases() as $system) {
+            $id = 'existing-' . $system->name;
+            $foreign = $this->dir . '/' . $id . '.sdb';
+            copy($archive->database, $foreign);
+            $db = Sqlite::open($foreign, false, $read->config->settings->journalMode);
+            try {
+                $db->exec('INSERT INTO archive(dateTime, usUnits, interval, outTemp) VALUES (?, ?, 5, 10)', [self::NOW, $system->value]);
+            } finally {
+                $db->close();
+            }
+            $hash = hash_file('sha256', $foreign);
+            $input = ['archive' => $id, 'name' => 'Existing', 'database' => basename($foreign), 'timezone' => 'UTC', 'archive_interval' => '300'];
+            // Old forms and crafted requests cannot override what the database stores.
+            if ($system !== UnitSystem::METRICWX) {
+                $input['unit_system'] = $system === UnitSystem::US ? 'METRICWX' : 'invalid';
+            }
+            $this->command('archive.connect', $input);
+            self::assertSame($hash, hash_file('sha256', $foreign));
+            $connected = Config::load($this->path)->archive($id);
+            self::assertNotNull($connected);
+            self::assertSame($system, $connected->unitSystem);
+            self::assertFalse($connected->enabled);
+            self::assertSame([], $connected->senders);
+        }
+    }
+
+    public function testConnectingRejectsUndetectableUnitsWithoutChangingConfigOrArchive(): void
+    {
+        $this->archive();
+        $read = new ReadModel($this->path);
+        $archive = $read->config->archive('garden');
+        self::assertNotNull($archive);
+        foreach ([
+            'empty' => [[], 'error.archive_units_empty'],
+            'mixed' => [[1, 17], 'error.archive_units_mixed'],
+            'unknown' => [[99], 'error.archive_units_unknown'],
+            'missing' => [[null], 'error.archive_units_unknown'],
+        ] as $id => [$values, $expected]) {
+            $foreign = $this->dir . '/' . $id . '.sdb';
+            $db = Sqlite::open($foreign, true, $read->config->settings->journalMode);
+            try {
+                // An imported schema can lack WeeWX's NOT NULL constraint.
+                $db->exec('CREATE TABLE archive(dateTime INTEGER PRIMARY KEY, usUnits INTEGER, interval INTEGER)');
+                foreach ($values as $index => $value) {
+                    $db->exec('INSERT INTO archive(dateTime, usUnits, interval) VALUES (?, ?, 5)', [self::NOW + $index * 300, $value]);
+                }
+            } finally {
+                $db->close();
+            }
+            $hash = hash_file('sha256', $foreign);
+            try {
+                $this->command('archive.connect', ['archive' => $id, 'name' => 'Existing', 'database' => basename($foreign), 'timezone' => 'UTC', 'archive_interval' => '300']);
+                self::fail('Undetectable storage units accepted');
+            } catch (Problem $error) {
+                self::assertSame($expected, $error->getMessage());
+            }
+            self::assertSame($hash, hash_file('sha256', $foreign));
+            self::assertSame($read->revision, (new ReadModel($this->path))->revision);
+        }
+    }
+
+    public function testOnlyNewArchivesOfferStorageUnitSelection(): void
+    {
+        $html = (new Page(new ReadModel($this->path), new Translator(), 'csrf'))->render('archives', []);
+        $dom = new DOMDocument();
+        @$dom->loadHTML($html);
+        $xpath = new DOMXPath($dom);
+        $create = $xpath->query('//form[input[@name="action" and @value="archive.create"]]//select[@name="unit_system"]');
+        $connect = $xpath->query('//form[input[@name="action" and @value="archive.connect"]]//*[@name="unit_system"]');
+        self::assertNotFalse($create);
+        self::assertNotFalse($connect);
+        self::assertSame(1, $create->length);
+        self::assertSame(0, $connect->length);
+        self::assertSame('US', $xpath->evaluate('string(//select[@name="unit_system"]/option[@selected]/@value)'));
+        self::assertSame('unit_system-hint', $xpath->evaluate('string(//select[@name="unit_system"]/@aria-describedby)'));
+        self::assertNotSame('', $xpath->evaluate('string(//*[@id="unit_system-hint"])'));
     }
 
     public function testWriterReloadsAConfigurationLoadedBeforeAnAdminChange(): void

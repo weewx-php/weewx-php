@@ -7,8 +7,9 @@
 #   docker compose -f tests/docker/compose.yml run --rm unit
 #   docker compose -f tests/docker/compose.yml run --rm unit-live
 #   docker compose -f tests/docker/compose.yml run --rm conformance
+#   docker compose -f tests/docker/compose.yml run --rm deploy
 #
-# tests/run.sh runs lint, unit and conformance in that order.
+# tests/run.sh runs lint, unit, frontend-js, deploy and conformance.
 
 # Named, so that a compose project in some other repository's `docker`
 # directory is not taken for this one.
@@ -30,6 +31,27 @@ x-php: &php
     WEEWX_PHP_TMP: /tmp
 
 services:
+  deploy:
+    build:
+      context: ../..
+      dockerfile: tests/docker/Dockerfile.deploy
+    image: weewx-php-deploy-tests
+    volumes:
+      - ../..:/repo:ro
+    tmpfs:
+      - /tmp
+    working_dir: /repo
+    network_mode: none
+    command: ["python", "-m", "unittest", "discover", "-s", "tests/deploy", "-v"]
+
+  frontend-js:
+    image: node:22-alpine
+    volumes:
+      - ../..:/repo:ro
+    working_dir: /repo
+    network_mode: none
+    command: ["node", "--test", "tests/chart-recipes.test.mjs", "tests/feed-client.test.mjs"]
+
   unit:
     <<: *php
     command: ["/opt/build/vendor/bin/phpunit", "--configuration", "phpunit.xml"]

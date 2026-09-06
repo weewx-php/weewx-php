@@ -10,6 +10,7 @@ use WeewxPhp\Config\Config;
 use WeewxPhp\Db\Json;
 use WeewxPhp\Db\Sqlite;
 use WeewxPhp\Weewx\Schema;
+use WeewxPhp\Weewx\UnitSystem;
 
 /** Domain reads use SQLite read-only connections and never initialize an archive. */
 final class ReadModel
@@ -40,7 +41,7 @@ final class ReadModel
         foreach ($this->rows('ingest.sdb', 'ingest_sender', 'SELECT id, name, state, protocol, model, last_seen, received, stored FROM ingest_sender ORDER BY first_seen LIMIT 2000') as $row) {
             $found[Sqlite::text($row['id'])] = $row;
         }
-        foreach ($this->rows('live.sdb', 'weewx_station', "SELECT sender AS id, name, state, 'weewx' AS protocol, driver_module AS model, last_seen, stored FROM weewx_station ORDER BY first_seen LIMIT 2000") as $row) {
+        foreach ($this->rows('live.sdb', 'weewx_station', "SELECT sender AS id, name, state, 'weewx' AS protocol, COALESCE(json_extract(r.source, '$.model'), driver_module) AS model, r.source, last_seen, stored FROM weewx_station s LEFT JOIN weewx_sensor r USING (collector, station) ORDER BY first_seen LIMIT 2000") as $row) {
             $found[Sqlite::text($row['id'])] = $row;
         }
         foreach ($this->config->stations as $id => $station) {
@@ -127,6 +128,30 @@ final class ReadModel
             $last = $db->scalar('SELECT dateTime FROM archive ORDER BY dateTime DESC LIMIT 1');
             return ['schema' => $schema, 'first' => isset($first['dateTime']) && is_int($first['dateTime']) ? $first['dateTime'] : null,
                 'last' => is_int($last) ? $last : null, 'units' => isset($first['usUnits']) && is_int($first['usUnits']) ? $first['usUnits'] : null];
+        } finally {
+            $db->close();
+        }
+    }
+
+    /** Detect storage units once when connecting a path already confined by DatabasePath. */
+    public static function detectArchiveUnits(string $path): UnitSystem
+    {
+        $db = Sqlite::readOnly($path);
+        try {
+            if (!Schema::read($db)->hasColumn('usUnits')) {
+                throw new Problem('error.archive', 'database');
+            }
+            // A single first record cannot reveal a database with mixed storage units.
+            $units = iterator_to_array($db->query('SELECT DISTINCT usUnits FROM archive LIMIT 2'), false);
+            if ($units === []) {
+                throw new Problem('error.archive_units_empty', 'database');
+            }
+            if (count($units) !== 1) {
+                throw new Problem('error.archive_units_mixed', 'database');
+            }
+            $value = $units[0]['usUnits'];
+            $system = is_int($value) ? UnitSystem::tryFrom($value) : null;
+            return $system ?? throw new Problem('error.archive_units_unknown', 'database');
         } finally {
             $db->close();
         }

@@ -64,7 +64,9 @@ final class ApiTest extends TestCase
         foreach ([['feed' => '../../secret'], ['feed' => ['outside']], ['feed' => 'outside', 'sql' => 'select * from archive'],
             ['feed' => 'outside', 'fields' => 'inTemp'], ['feed' => 'outside', 'fields' => ['temperature']],
             ['feed' => 'outside', 'fields' => 'temperature,temperature'], ['feed' => 'outside', 'fields' => ''],
-            ['feed' => 'outside', 'range' => 'alltime']] as $query) {
+            ['feed' => 'outside', 'range' => 'alltime'], ['feed' => 'outside', 'units' => ['us']],
+            ['feed' => 'outside', 'units' => 'station'], ['feed' => 'outside', 'units' => null],
+            ['feed' => 'outside', 'units' => "us\r\nX-Test: bad"]] as $query) {
             self::assertSame(400, $api->handle('GET', $query)->status);
         }
         self::assertSame(404, $api->handle('GET', ['feed' => 'private'])->status);
@@ -146,6 +148,14 @@ final class ApiTest extends TestCase
         self::assertSame(200, $head->status);
         self::assertSame('', $head->body);
         self::assertSame($response->headers['ETag'], $head->headers['ETag']);
+        $us = $this->endpoint()->handle('GET', ['feed' => 'outside', 'units' => 'us'], ['if-none-match' => $response->headers['ETag']]);
+        self::assertSame(200, $us->status);
+        self::assertSame(32, $this->fields($us)['temperature']['value']);
+        self::assertSame('°F', $this->fields($us)['temperature']['unitLabel']);
+        self::assertNotSame($response->headers['ETag'], $us->headers['ETag']);
+        self::assertSame(304, $this->endpoint()->handle('GET', ['feed' => 'outside', 'units' => 'us'], ['if-none-match' => $us->headers['ETag']])->status);
+        self::assertSame(0, $this->fields($this->endpoint()->handle('GET', ['feed' => 'outside']))['temperature']['value']);
+        self::assertSame(0, $this->budget->snapshot()['rows']);
     }
 
     public function testLiveUsesRealMeasurementTimeAndStableEtagAndNoPrivateFields(): void
@@ -171,6 +181,8 @@ final class ApiTest extends TestCase
         self::assertSame('*', $first->headers['Access-Control-Allow-Origin']);
         self::assertStringNotContainsString('inTemp', $first->body);
         self::assertSame(0, $this->fields($first)['humidity']['value']);
+        $us = $make(self::NOW)->handle('GET', ['feed' => 'live', 'units' => 'us']);
+        self::assertSame('68,0 °F', $this->fields($us)['temperature']['formatted']);
         self::assertSame($first->headers['ETag'], $make(self::NOW + 1)->handle('GET', ['feed' => 'live'])->headers['ETag']);
         $stale = $make(self::NOW + 121)->handle('GET', ['feed' => 'live']);
         self::assertSame('stale', $this->fields($stale)['temperature']['status']);

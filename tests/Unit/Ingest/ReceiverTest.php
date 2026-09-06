@@ -76,6 +76,27 @@ final class ReceiverTest extends TestCase
         self::assertSame('Garten', Store::stations($this->runtime->config->settings)[$sender->id]->name);
     }
 
+    public function testAnalysisAndArchiveLocksDoNotBlockAcceptedPackets(): void
+    {
+        $this->post($this->ecowitt());
+        [$sender] = $this->runtime->ingest()->senders();
+        $this->runtime->ingest()->adopt($sender->id, 'Rain', self::NOW);
+        $this->runtime->nonBlockingIngest();
+        $this->runtime->live();
+        $archive = \WeewxPhp\Tick\Lock::tryAcquire($this->runtime->config->settings->lockPath());
+        $analysis = \WeewxPhp\Tick\Lock::tryAcquire($this->dir . '/analytics.lock');
+        self::assertNotNull($archive);
+        self::assertNotNull($analysis);
+        try {
+            self::assertSame(200, $this->post($this->ecowitt())->status);
+            self::assertTrue($this->receiver->wrote());
+            self::assertSame(1, $this->runtime->live()->count());
+        } finally {
+            $analysis->release();
+            $archive->release();
+        }
+    }
+
     public function testTwoEcowittConsolesSharePathAndHaveSeparateAdoption(): void
     {
         $this->post($this->ecowitt());

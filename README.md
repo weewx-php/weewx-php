@@ -25,21 +25,36 @@ refresh schedules, WeeWX/xaggs coverage and rainfall comparisons.
 The [recipe guide](docs/frontend-recipes.md) covers output profiles, explicit
 time references, theme ownership, prepared comparisons, live snapshots and diagnostics.
 The [theme cookbook](docs/theme-cookbook.md) walks through PHP themes, runnable
-Apache ECharts examples at `/cookbook.php`, opt-in public feeds at `/api/v1.php`,
+Apache ECharts examples in the optional Cookbook theme, public feeds at `/api/v1.php`,
 HTML embeds and an installable WordPress sidebar plugin.
 
-The [demo theme](themes/demo/README.md) at `public/index.php` shows current
-readings, temperature and rainfall charts, and sunrise/sunset using those tags.
+The bundled [basic theme](docs/themes.md) at `public/index.php` shows live readings
+with units and measurement times. Demo and Cookbook are separate theme packages;
+install approved packages, update them and select the active theme under
+**Admin → Themes**. Manual packages remain supported. See the
+[theme shop and catalog setup](docs/themes.md#install-and-select-a-theme).
+The optional [Forecast extension](docs/forecast.md) adds daily and hourly tags,
+refreshed by the existing tick and used in the demo theme.
+Enable them per archive in the admin or configuration.
+
+Optional [extensions](docs/extensions.md) can register their own theme tags and
+bounded background work. The [climate extension](https://github.com/weewx-php/extension-climate)
+provides worldwide ERA5 calendar-day comparisons for 1991–2020, independently
+of the measured archive. See the [data-source comparison](docs/climate-sources.md).
 
 ## What you need
 
-- PHP 8.1 or newer with the `sqlite3` and `json` extensions. Nothing is
+- PHP 8.1 or newer with the `sqlite3`, `json` and `Phar` extensions. Nothing is
   installed with Composer at run time; the application is the files.
 - Something that calls the tick: a cron job on the host, a call of
   `tick.php` from outside, or an ingest that calls it after delivering.
 - A place for the data directory that the web does not serve. See below.
 
 ## Getting it running
+
+For updates of an existing All-Inkl installation, use the
+[FTPS core deployment script](docs/deploy-all-inkl.md). It preserves configuration,
+data, installed extensions and optional themes.
 
 Copy the repository to the host. Keep `data/` outside the web root if the
 host lets you choose, or serve only `public/`; the directory gets an
@@ -190,6 +205,11 @@ has every key.
 
 ## The commands
 
+Full installation backups run daily through the tick, with three days of
+retention by default. **Backups** in the admin lists completed TAR packages
+and provides authenticated downloads. See [backup and restore](docs/backups.md)
+for contents, settings, runtime requirements and recovery commands.
+
 `php bin/weewx-php help` lists them; [docs/commands.md](docs/commands.md)
 describes each.
 
@@ -202,7 +222,8 @@ describes each.
 | `catchup` | build everything the journal covers, whatever the time budget |
 | `rebuild` | work a span out again after a correction |
 | `columns` | the archive's columns against `[[[columns]]]` |
-| `backup` | copy a database the safe way |
+| `backup` | full installation backup, or an individual database copy |
+| `restore` | validate and recover a full backup into a new directory |
 | `verify` | the daily summaries against the records |
 | `upload` | list the uploads, ask the services, or send now |
 | `ingest` | connection details, discovered senders and adoption |

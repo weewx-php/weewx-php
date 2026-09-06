@@ -23,6 +23,16 @@ final class Service
     public function execute(string $action, array $input): void
     {
         $read = new ReadModel($this->path);
+        if ($action === 'backup.create') {
+            (new \WeewxPhp\Backup\Backups($read->config->settings))->request($this->now);
+            $auth = new Auth($read->config->settings);
+            try {
+                $auth->audit('backup.request', $this->now);
+            } finally {
+                $auth->close();
+            }
+            return;
+        }
         if (in_array($action, ['station.adopt', 'station.reject', 'station.restore'], true)) {
             $id = Input::id(Input::text($input, 'station'));
             $live = LiveDb::open($read->config->settings->liveDbPath(), $read->config->settings->journalMode);
@@ -67,9 +77,11 @@ final class Service
                 match ($action) {
                     'archive.create', 'archive.connect' => $this->createArchive($file, $config, $input, $action === 'archive.connect'),
                     'archive.save' => $this->saveArchive($file, $config, $input),
+                    'archive.stations' => $this->saveArchiveStations($file, $config, $input),
                     'station.rename' => $this->renameStation($file, $config, $input),
                     'mapping.save' => $this->saveMapping($file, $config, $input),
                     'mapping.save_all' => $this->saveAllMappings($file, $config, $input),
+                    'mapping.accept_suggestions' => $this->acceptSuggestions($file, $config, $input),
                     'mapping.explicit' => $this->explicit($file, $config, $input),
                     'column.create' => $this->column($file, $config, $input),
                     'field.define' => $this->source($file, $config, $input),
@@ -100,7 +112,8 @@ final class Service
     /** @param array<string, mixed> $input */
     private function createArchive(ConfFile $file, Config $config, array $input, bool $connect): void
     {
-        $id = Input::id(Input::text($input, 'archive'));
+        $requested = Input::text($input, 'archive');
+        $id = $requested === '' ? 'archive-' . bin2hex(random_bytes(8)) : Input::id($requested);
         if ($config->archive($id) !== null) {
             throw new Problem('error.exists', 'archive');
         }
@@ -117,7 +130,9 @@ final class Service
         $one->set('explicit_mapping', 'true');
         $one->set('senders', []);
         $one->set('enabled', 'false');
-        foreach (['name', 'timezone', 'unit_system', 'archive_interval'] as $key) {
+        $one->set('unit_system', $connect ? ReadModel::detectArchiveUnits($path)->name : Input::text($input, 'unit_system', 'US'));
+        $one->set('archive_interval', self::interval($input, (string) $config->settings->archiveInterval));
+        foreach (['name', 'timezone'] as $key) {
             $one->set($key, $key === 'name' ? Input::label(Input::text($input, $key)) : Input::text($input, $key));
         }
     }
@@ -129,17 +144,43 @@ final class Service
         $archive = $config->archive($id) ?? throw new Problem('error.archive');
         $one = $file->root()->section('Archives')->section($id);
         $one->set('name', Input::label(Input::text($input, 'name')));
-        foreach (['location', 'latitude', 'longitude', 'altitude'] as $key) {
+        foreach (['location', 'latitude', 'longitude'] as $key) {
             $value = Input::text($input, $key);
             if ($value === '') {
                 $one->remove($key);
             } else {
-                $one->set($key, $key === 'altitude' ? array_map('trim', explode(',', $value)) : $value);
+                $one->set($key, $key === 'location' ? Input::label($value) : self::decimal($value));
             }
+        }
+        if (array_key_exists('altitude_value', $input)) {
+            $height = trim(Input::text($input, 'altitude_value'));
+            if ($height === '') {
+                $one->remove('altitude');
+            } else {
+                $unit = Input::text($input, 'altitude_unit', 'meter');
+                if (!in_array($unit, \WeewxPhp\Config\Altitude::UNITS, true)) {
+                    throw new Problem('error.input', 'altitude_unit');
+                }
+                $one->set('altitude', [self::decimal($height), $unit]);
+            }
+        } elseif (array_key_exists('altitude', $input)) {
+            $height = Input::text($input, 'altitude');
+            $height === '' ? $one->remove('altitude') : $one->set('altitude', array_map('trim', explode(',', $height)));
         }
         $one->set('enabled', Input::text($input, 'enabled') === 'true' ? 'true' : 'false');
         $one->set('timezone', Input::text($input, 'timezone', $archive->timezone->getName()));
-        $one->set('archive_interval', Input::text($input, 'archive_interval', (string) $archive->interval($config->settings)));
+        $one->set('archive_interval', self::interval($input, (string) $archive->interval($config->settings)));
+        if (Input::text($input, 'preserve_senders') !== '1') {
+            $this->saveArchiveStations($file, $config, $input);
+        }
+    }
+
+    /** @param array<string, mixed> $input */
+    private function saveArchiveStations(ConfFile $file, Config $config, array $input): void
+    {
+        $id = Input::text($input, 'archive');
+        $archive = $config->archive($id) ?? throw new Problem('error.archive');
+        $one = $file->root()->section('Archives')->section($id);
         $senders = Input::strings($input, 'senders');
         foreach ($senders as $sender) {
             if ($config->station($sender) === null) {
@@ -156,6 +197,28 @@ final class Service
                 $fields?->remove($sender);
             }
         }
+    }
+
+    private static function decimal(string $value): string
+    {
+        $value = str_replace(',', '.', trim($value));
+        if (preg_match('/^-?\d+(?:\.\d+)?$/D', $value) !== 1 || !is_finite((float) $value)) {
+            throw new Problem('error.input');
+        }
+        return $value;
+    }
+
+    /** @param array<string, mixed> $input */
+    private static function interval(array $input, string $default): string
+    {
+        if (!array_key_exists('archive_interval_minutes', $input)) {
+            return Input::text($input, 'archive_interval', $default);
+        }
+        $minutes = Input::text($input, 'archive_interval_minutes');
+        if (preg_match('/^\d{1,2}$/D', $minutes) !== 1 || (int) $minutes < 1 || (int) $minutes > 60) {
+            throw new Problem('error.input', 'archive_interval_minutes');
+        }
+        return (string) ((int) $minutes * 60);
     }
 
     /** @param array<string, mixed> $input */
@@ -261,6 +324,25 @@ final class Service
             $this->saveMapping($file, $config, ['archive' => $id, 'station' => $station, 'mapping' => $mapping,
                 'continue_history' => Input::text($input, 'continue_history'), 'history' => $confirmations[$station] ?? []]);
         }
+    }
+
+    /** @param array<string, mixed> $input */
+    private function acceptSuggestions(ConfFile $file, Config $config, array $input): void
+    {
+        $id = Input::text($input, 'archive');
+        $archive = $config->archive($id) ?? throw new Problem('error.archive');
+        if (Input::text($input, 'confirm') !== 'yes') {
+            throw new Problem('error.suggestion_confirmation');
+        }
+        $candidates = MappingSuggestions::candidates(new ReadModel($this->path), $archive);
+        if ($candidates === [] || !hash_equals(MappingSuggestions::fingerprint($archive, $candidates), Input::text($input, 'suggestion'))) {
+            throw new Problem('error.conflict', status: 409);
+        }
+        $mapping = [];
+        foreach ($candidates as $source => $unused) {
+            $mapping[$source] = $source;
+        }
+        $this->saveMapping($file, $config, ['archive' => $id, 'station' => ($archive->senders ?? [])[0], 'mapping' => $mapping, 'history' => $mapping]);
     }
 
     private function populated(string $database, string $column): bool
@@ -374,10 +456,14 @@ final class Service
     private function theme(ConfFile $file, Config $config, array $input): void
     {
         $id = Input::text($input, 'theme');
-        $registry = new ThemeRegistry($this->themeDirectory ?? dirname(__DIR__, 2) . '/themes');
+        $registry = ThemeRegistry::configured($this->path, $this->themeDirectory, $file);
         $values = $registry->validate($id, $input, $config);
         $themes = self::section($file->root(), 'Themes');
         if (Input::text($input, 'activate') === 'true') {
+            $section = $themes->optionalSection($id);
+            if ($section !== null && \WeewxPhp\Extension\Installer::managed($section)) {
+                throw new Problem('error.theme_activation');
+            }
             $themes->set('active', $id);
         }
         $one = self::section($themes, $id);
@@ -390,7 +476,7 @@ final class Service
     /** @param array<string, mixed> $input */
     private function settings(ConfFile $file, array $input): void
     {
-        foreach (['timezone', 'archive_delay', 'live_retention', 'raw_retention', 'time_budget', 'max_intervals_per_run'] as $key) {
+        foreach (['timezone', 'archive_delay', 'live_retention', 'raw_retention', 'time_budget', 'max_intervals_per_run', 'backup_enabled', 'backup_retention_days', 'visit_tick_enabled'] as $key) {
             $value = Input::text($input, $key);
             if ($value !== '') {
                 $file->root()->set($key, $value);

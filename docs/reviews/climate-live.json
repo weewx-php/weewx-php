@@ -1,0 +1,104 @@
+{
+    "tested_at_utc": "2026-09-06T14:06:02+00:00",
+    "php": "8.5.1",
+    "location": "Sydney, Australia",
+    "coordinates": [
+        -33.87,
+        151.21
+    ],
+    "reference": [
+        1991,
+        2020
+    ],
+    "annual_downloads": 30,
+    "final_status": "ready",
+    "import_seconds": 4.077,
+    "cache_bytes": 451201,
+    "theme_read_ms": 14.397,
+    "year_series_points": 365,
+    "memory_peak_bytes": 4194304,
+    "stream_fallback_http": 200,
+    "stream_fallback_bytes": 12379,
+    "normal": {
+        "type": "report",
+        "periods": {
+            "points": [],
+            "unit": null,
+            "group": null,
+            "status": "ready",
+            "asOf": null,
+            "computedAt": null,
+            "delta": false
+        },
+        "values": {
+            "outTemp": {
+                "value": 14.29727272727273,
+                "unit": "degree_C",
+                "group": "group_temperature",
+                "status": "ready",
+                "asOf": 1788616800,
+                "computedAt": 1788703562,
+                "coverage": 1,
+                "delta": false
+            },
+            "outTempMin": {
+                "value": 8.742727272727274,
+                "unit": "degree_C",
+                "group": "group_temperature",
+                "status": "ready",
+                "asOf": 1788616800,
+                "computedAt": 1788703562,
+                "coverage": 1,
+                "delta": false
+            },
+            "outTempMax": {
+                "value": 20.099393939393945,
+                "unit": "degree_C",
+                "group": "group_temperature",
+                "status": "ready",
+                "asOf": 1788616800,
+                "computedAt": 1788703562,
+                "coverage": 1,
+                "delta": false
+            },
+            "rain": {
+                "value": 1.4396969696969697,
+                "unit": "mm",
+                "group": "group_rain",
+                "status": "ready",
+                "asOf": 1788616800,
+                "computedAt": 1788703562,
+                "coverage": 1,
+                "delta": false
+            }
+        },
+        "meta": {
+            "date": "2026-09-06",
+            "start_year": 1991,
+            "end_year": 2020,
+            "samples": {
+                "outTemp": 30,
+                "outTempMin": 30,
+                "outTempMax": 30,
+                "rain": 30
+            },
+            "expected": 30,
+            "computed_at": 1788703562,
+            "grid": {
+                "latitude": -33.75,
+                "longitude": 151,
+                "elevation": 69
+            },
+            "source": "Open-Meteo / ERA5",
+            "source_url": "https://open-meteo.com/en/docs/historical-weather-api",
+            "license": "CC BY 4.0",
+            "license_url": "https://creativecommons.org/licenses/by/4.0/",
+            "method": "calendar-window mean, equal reference-year weights",
+            "window_days": 5,
+            "window_width": 11,
+            "data_kind": "reanalysis"
+        },
+        "status": "ready"
+    },
+    "scope": "Local PHP CLI only; the target shared hosting was not accessed. CA bundle supplied to this process; TLS verification enabled."
+}

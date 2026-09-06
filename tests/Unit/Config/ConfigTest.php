@@ -94,7 +94,7 @@ final class ConfigTest extends TestCase
         self::assertSame(LatePackets::Rebuild, $settings->latePackets);
         self::assertSame(3 * 86400, $settings->liveRetention);
         self::assertSame(3600, $settings->rawRetention);
-        self::assertSame(20, $settings->timeBudget);
+        self::assertSame(0, $settings->timeBudget);
         self::assertSame(100, $settings->maxIntervalsPerRun);
         self::assertSame(JournalMode::Wal, $settings->journalMode);
         self::assertSame('secret', $settings->tickToken);

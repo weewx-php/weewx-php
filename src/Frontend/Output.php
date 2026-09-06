@@ -43,8 +43,13 @@ final class Output
 
     public function number(float $value, ?string $group, ?string $unit, string $observation = ''): string
     {
-        $places = $this->decimals[$observation] ?? $this->decimals[$unit ?? ''] ?? $this->decimals[$group ?? '']
-            ?? (in_array($group, ['group_count', 'group_boolean'], true) ? 0 : 1);
+        $places = $this->places($group, $unit, $observation);
         return number_format($value, $places, $this->language === 'de' ? ',' : '.', $this->language === 'de' ? '.' : ',');
+    }
+
+    public function places(?string $group, ?string $unit, string $observation = ''): int
+    {
+        return $this->decimals[$observation] ?? $this->decimals[$unit ?? ''] ?? $this->decimals[$group ?? '']
+            ?? (in_array($group, ['group_count', 'group_boolean'], true) ? 0 : 1);
     }
 }

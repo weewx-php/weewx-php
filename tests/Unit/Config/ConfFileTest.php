@@ -11,6 +11,16 @@ use WeewxPhp\Tests\Support\TempDir;
 
 final class ConfFileTest extends TestCase
 {
+    public function testNewParentValuesRemainInTheirSectionWhenWritten(): void
+    {
+        $file = ConfFile::parse("[Archives]\n    [[garden]]\n        [[[fields]]]\n            [[[[sensor]]]]\n                outTemp = extraTemp1\n");
+        $file->root()->set('backup_retention_days', '7');
+        $file->root()->section('Archives')->section('garden')->set('database', 'restored.sdb');
+        $read = ConfFile::parse($file->toString());
+        self::assertSame(7, $read->root()->value('backup_retention_days')->int());
+        self::assertSame('restored.sdb', $read->root()->section('Archives')->section('garden')->value('database')->string());
+    }
+
     /**
      * A file in the shape ConfigObj writes. Built from lines rather than a
      * heredoc, because a blank line inside a section carries the section's

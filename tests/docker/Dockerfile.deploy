@@ -1,0 +1,8 @@
+FROM python:3.13-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends openssl \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir pyftpdlib==2.0.1 pyOpenSSL==26.4.0 pip-audit==2.10.1
+
+ENV PYTHONDONTWRITEBYTECODE=1
+USER 1001:1001

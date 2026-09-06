@@ -23,18 +23,41 @@ final class BackupCommand implements Command
 
     public function usage(): string
     {
-        return 'backup <archive> <target file>';
+        return 'backup [<archive> <target file>]';
     }
 
     public function summary(): string
     {
-        return 'copy an archive database the safe way';
+        return 'back up the installation or copy one archive safely';
     }
 
     public function run(Application $app, array $args): int
     {
         $runtime = $app->runtime();
         $console = $app->console();
+        if ($args === []) {
+            $runtime->ensureDataDir();
+            $lock = \WeewxPhp\Tick\Lock::tryAcquire($runtime->config->settings->lockPath());
+            if ($lock === null) {
+                $console->error('Another writer is running');
+                return 1;
+            }
+            try {
+                $runtime->refresh();
+                $runtime->live();
+                $runtime->state();
+                $backups = new \WeewxPhp\Backup\Backups($runtime->config->settings);
+                $result = $backups->run($runtime, true);
+                if ($result['status'] !== 'complete') {
+                    $console->error('Backup failed; check source files, free space and the PHP Phar extension');
+                    return 1;
+                }
+                $console->line($backups->directory() . '/' . $result['filename']);
+                return 0;
+            } finally {
+                $lock->release();
+            }
+        }
         $archive = isset($args[0]) ? $runtime->config->archive($args[0]) : null;
         $target = $args[1] ?? null;
         if ($archive === null || $target === null) {

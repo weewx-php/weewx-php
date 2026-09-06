@@ -1,5 +1,11 @@
 # Configuration reference
 
+`[Themes] units` selects the default display profile independently of archive
+storage units. See [Display units](display-units.md#station-setting).
+
+Optional forecast settings belong to the [Forecast extension](forecast.md),
+configured under Extensions in the Admin.
+
 Every option of `weewx-php.conf`, in the order the example file has them.
 The file has the shape of `weewx.conf`: a section is a name in brackets, a
 section inside it has one bracket more, a list is separated by commas, a
@@ -66,12 +72,37 @@ reaches.
 How long the raw upload stays stored beside a packet, for looking at what
 a console actually sent. 0 to `1d`. Default: `1h`.
 
+### backup_enabled
+
+Create a full installation backup on the first tick of each local calendar
+day (`timezone`). Default: `true`. A missed day is caught up by creating one
+current backup when the tick resumes. Manual backups remain available when
+disabled. The PHP `Phar` extension is required to create and restore TAR files.
+
+### backup_retention_days
+
+Retention for completed full backup packages in `data_dir/backups`. Integer
+days, from 1 to 3650; default: `3`. On successful backup, remove packages at
+least this many 24-hour periods old, retaining the new package. Failures never
+expire the previous backup. Legacy individual `.sdb` backups are not removed.
+
 ### time_budget
 
-Seconds one tick may spend building records, over all archives together.
-1 to 3600. Default: `20`. Under PHP's own execution limit, two thirds of
-that limit apply instead. What does not fit stays marked for the next
-tick.
+`0` (the default) selects automatic runtime; `1` to `3600` sets a manual
+ceiling in seconds. Automatic mode reads PHP's execution limit and reserves
+10% (at least two seconds), including time already spent on the request.
+Without a readable limit, analysis starts at 20 seconds and grows by 25%
+only after useful work fills the window, up to 300 seconds. Durable runtime
+checkpoints reduce the window after an interrupted process. This is a safe
+observed budget, not proof of a hosting provider's hidden timeout. CLI and
+web profiles are separate. Manual budgets still respect PHP's limit.
+
+The archive writer and analysis worker use separate locks. Analysis reads
+can overlap new archive writes in WAL mode; only one analysis worker runs.
+Short transactions validate the source revision before saving chunks,
+progress or results. Each slice is resumable and more slices run immediately
+while time remains. Unfinished work continues on the next trigger. Other
+SQLite journal modes may briefly serialize database access.
 
 ### max_intervals_per_run
 

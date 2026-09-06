@@ -83,9 +83,9 @@ final class LiveDb
      * WAL permits concurrent readers. FULL makes a delivery acknowledgement
      * durable before a remote collector releases its local copy.
      */
-    public static function open(string $path, JournalMode $journalMode): self
+    public static function open(string $path, JournalMode $journalMode, int $busyTimeout = 5000): self
     {
-        $db = Sqlite::open($path, true, $journalMode, 'FULL');
+        $db = Sqlite::open($path, true, $journalMode, 'FULL', $busyTimeout);
         $db->exec('PRAGMA auto_vacuum=INCREMENTAL');
         $db->exec(self::SCHEMA);
         $db->exec(CollectorStore::SCHEMA);
@@ -256,10 +256,10 @@ final class LiveDb
      *
      * @return list<array{stop: int, seconds: int}>
      */
-    public function due(int $now, int $grace, string $archive): array
+    public function due(int $now, int $grace, string $archive, int $minStop = 0): array
     {
         $due = [];
-        foreach ($this->db->query('SELECT stop, seconds FROM pending WHERE stop + ? <= ? AND archive = ? ORDER BY stop', [$grace, $now, $archive]) as $row) {
+        foreach ($this->db->query('SELECT stop, seconds FROM pending WHERE stop <= ? AND archive = ? AND stop >= ? ORDER BY stop', [$now - $grace, $archive, $minStop]) as $row) {
             $due[] = ['stop' => (int) Sqlite::text($row['stop']), 'seconds' => (int) Sqlite::text($row['seconds'])];
         }
         return $due;
@@ -421,7 +421,7 @@ final class LiveDb
      */
     public function forgetRaw(int $before): int
     {
-        return $this->db->exec('UPDATE packet SET raw = NULL WHERE raw IS NOT NULL AND received < ?', [$before]);
+        return $this->db->exec('UPDATE packet SET raw = NULL WHERE seq IN (SELECT seq FROM packet WHERE raw IS NOT NULL AND received < ? LIMIT 1000)', [$before]);
     }
 
     /** Drop packets older than a moment, and the dialect descriptions nothing refers to any more. */
@@ -431,7 +431,7 @@ final class LiveDb
             // Repair needs the complete retained day and its run-up. The
             // archive cursor survives time limits, restarts and receiver races.
             $before = $this->replay()->retentionCutoff($before);
-            $dropped = $this->db->exec('DELETE FROM packet WHERE dateTime < ?', [$before]);
+            $dropped = $this->db->exec('DELETE FROM packet WHERE seq IN (SELECT seq FROM packet WHERE dateTime < ? ORDER BY dateTime LIMIT 1000)', [$before]);
             $this->db->exec('DELETE FROM dialect_mapping WHERE digest NOT IN (SELECT mapping FROM packet WHERE mapping IS NOT NULL)');
             $this->db->exec('DELETE FROM pending WHERE stop < ?', [$before]);
             return $dropped;
@@ -441,7 +441,7 @@ final class LiveDb
     /** Give freed pages back to the file system, a little at a time. */
     public function vacuum(): void
     {
-        $this->db->exec('PRAGMA incremental_vacuum');
+        $this->db->exec('PRAGMA incremental_vacuum(100)');
     }
 
     // -- helpers ----------------------------------------------------------

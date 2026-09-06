@@ -12,7 +12,9 @@ use WeewxPhp\Db\Sqlite;
 final class Cache
 {
     private readonly Sqlite $db;
-    public const VERSION = 'frontend-3';
+    /** @var array<string, int> */
+    private array $writeRevisions = [];
+    public const VERSION = 'frontend-5';
     public const MAX_REQUESTS = 1000;
 
     public function __construct(Settings $settings)
@@ -55,7 +57,7 @@ final class Cache
     public function observe(ArchiveConfig $archive): int
     {
         $token = ArchiveReader::fingerprint($archive->database);
-        $signature = hash('sha256', self::VERSION . json_encode($archive, JSON_THROW_ON_ERROR));
+        $signature = hash('sha256', self::VERSION . CacheJson::encode($archive));
         return $this->db->transaction(function () use ($archive, $token, $signature): int {
             $known = $this->db->one('SELECT * FROM source WHERE archive = ?', [$archive->id]);
             if ($known === null) {
@@ -158,6 +160,25 @@ final class Cache
         return $this->db->one('SELECT * FROM request WHERE id = ?', [$id]);
     }
 
+    /** Work and its source generation must be read in the same SQLite snapshot.
+     * @return array<string, mixed>|null
+     */
+    public function requestForWork(string $id): ?array
+    {
+        return $this->db->one('SELECT r.*, s.revision AS source_revision FROM request r JOIN source s ON s.archive = r.archive WHERE r.id = ? AND s.pending = 0', [$id]);
+    }
+
+    public function guardWrites(string $archive, int $revision): void
+    {
+        $this->writeRevisions[$archive] = $revision;
+    }
+
+    private function canWrite(string $archive): bool
+    {
+        return !isset($this->writeRevisions[$archive])
+            || (!$this->pending($archive) && $this->revision($archive) === $this->writeRevisions[$archive]);
+    }
+
     /** @return list<array<string, mixed>> */
     public function due(int $now, int $limit = 16): array
     {
@@ -210,7 +231,11 @@ final class Cache
 
     public function storeChunk(string $key, string $archive, Span $span, Value $value): void
     {
-        $this->db->exec('INSERT INTO chunk(id, archive, start, end, payload) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING', [$key, $archive, $span->start, $span->end, ResultCodec::encode($value)]);
+        $this->db->transaction(function () use ($key, $archive, $span, $value): void {
+            if ($this->canWrite($archive)) {
+                $this->db->exec('INSERT INTO chunk(id, archive, start, end, payload) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING', [$key, $archive, $span->start, $span->end, ResultCodec::encode($value)]);
+            }
+        });
     }
 
     /** @return list<array<string, mixed>> */
@@ -286,7 +311,11 @@ final class Cache
 
     public function storeState(string $scope, string $archive, Span $span, Accumulator $state): void
     {
-        $this->db->exec('INSERT INTO aggregate_state(scope, archive, start, end, payload) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING', [$scope, $archive, $span->start, $span->end, json_encode($state->save(), JSON_THROW_ON_ERROR)]);
+        $this->db->transaction(function () use ($scope, $archive, $span, $state): void {
+            if ($this->canWrite($archive)) {
+                $this->db->exec('INSERT INTO aggregate_state(scope, archive, start, end, payload) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING', [$scope, $archive, $span->start, $span->end, json_encode($state->save(), JSON_THROW_ON_ERROR)]);
+            }
+        });
     }
 
     /** Merge a complete partition only; no approximation, overlap or double counting. */

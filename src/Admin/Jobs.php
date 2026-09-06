@@ -71,13 +71,13 @@ final class Jobs
     }
 
     /** Called with the tick's writer lock held. */
-    public static function run(Runtime $runtime, Budget $budget): void
+    public static function run(Runtime $runtime, Budget $budget): bool
     {
         $db = self::store($runtime->config->settings);
         try {
             $job = $db->one("SELECT * FROM admin_job WHERE status IN ('queued', 'running') ORDER BY created LIMIT 1");
             if ($job === null || !$budget->allows()) {
-                return;
+                return true;
             }
             $id = Sqlite::text($job['id']);
             $archive = $runtime->config->archive(Sqlite::text($job['archive']));
@@ -144,6 +144,7 @@ final class Jobs
             } catch (Throwable $error) {
                 $db->exec("UPDATE admin_job SET status = 'failed', result = ? WHERE id = ?", [$error instanceof Problem ? $error->getMessage() : 'error.maintenance', $id]);
                 $runtime->log->error('maintenance failed: ' . $id . ' (' . $error::class . ')');
+                return false;
             } finally {
                 $archiver?->close();
                 $weather?->close();
@@ -151,5 +152,6 @@ final class Jobs
         } finally {
             $db->close();
         }
+        return true;
     }
 }

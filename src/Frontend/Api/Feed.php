@@ -4,10 +4,12 @@ declare(strict_types=1);
 
 namespace WeewxPhp\Frontend\Api;
 
+use WeewxPhp\Frontend\Output;
 use WeewxPhp\Frontend\Query;
 use WeewxPhp\Frontend\QueryError;
 use WeewxPhp\Frontend\Report;
 use WeewxPhp\Frontend\Series;
+use WeewxPhp\Frontend\UnitPreferences;
 use WeewxPhp\Frontend\Value;
 use WeewxPhp\Frontend\Weather;
 
@@ -57,7 +59,7 @@ final class Feed
     /** @param list<string> $fields
      * @return array<string, mixed>
      */
-    public function snapshot(string $id, array $fields): array
+    public function snapshot(string $id, array $fields, ?UnitPreferences $units = null): array
     {
         $data = [];
         $points = 0;
@@ -66,6 +68,16 @@ final class Feed
             $result = $query === null
                 ? $this->weather->live($this->live[$name], $this->liveMaxAge)
                 : $query->prepared()->get();
+            if ($units !== null) {
+                $format = $result->output ?? new Output();
+                $result = $units->output(new Output(
+                    $format->language,
+                    decimals: $format->decimals,
+                    missing: $format->missing,
+                    dateFormat: $format->dateFormat,
+                    labels: $format->labels,
+                ))->apply($result, $result instanceof Report ? '' : $result->observation);
+            }
             $row = $result->jsonSerialize();
             $row['type'] = $result instanceof Series ? 'series' : ($result instanceof Report ? 'report' : 'value');
             $row['source'] = $query === null ? 'live' : ($query->spec()->period === 'almanac' ? 'astronomy' : 'archive');

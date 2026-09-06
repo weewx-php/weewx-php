@@ -1,7 +1,7 @@
 #!/bin/sh
 # Every test in this repository, in containers. One command, one exit code.
 #
-#   tests/run.sh                  lint, unit and conformance
+#   tests/run.sh                  lint, unit, frontend-js, deploy and conformance
 #   tests/run.sh unit             one of them
 #   tests/run.sh unit conformance
 #
@@ -22,7 +22,7 @@ fi
 $compose build --quiet
 
 if [ $# -eq 0 ]; then
-    set -- lint unit conformance
+    set -- lint unit frontend-js deploy conformance
 fi
 
 status=0

@@ -86,6 +86,11 @@ final class Value implements JsonSerializable, Stringable
         return $this->html();
     }
 
+    public function unitLabel(): string
+    {
+        return trim($this->output->labels[$this->unit ?? ''] ?? self::label($this->unit));
+    }
+
     public static function label(?string $unit): string
     {
         return match ($unit) {
@@ -97,6 +102,8 @@ final class Value implements JsonSerializable, Stringable
             'watt_per_meter_squared' => ' W/m²', 'uv_index' => '',
             'mm_per_hour' => ' mm/h', 'cm_per_hour' => ' cm/h', 'inch_per_hour' => ' in/h',
             'foot' => ' ft', 'meter' => ' m', 'second' => ' s',
+            'km' => ' km', 'mile' => ' mi', 'liter' => ' L', 'gallon' => ' gal',
+            'degree_C_day' => ' °C·day', 'degree_F_day' => ' °F·day',
             'microsiemens_per_centimeter' => ' µS/cm', 'volt' => ' V',
             default => ' ' . $unit,
         };
@@ -106,6 +113,7 @@ final class Value implements JsonSerializable, Stringable
     public function jsonSerialize(): array
     {
         return ['value' => $this->raw, 'unit' => $this->unit, 'group' => $this->group,
+            'unitLabel' => $this->unitLabel(), 'decimals' => ($this->output ?? new Output())->places($this->group, $this->unit, $this->observation),
             'status' => $this->status, 'asOf' => $this->asOf, 'computedAt' => $this->computedAt, 'coverage' => $this->coverage, 'delta' => $this->delta];
     }
 }

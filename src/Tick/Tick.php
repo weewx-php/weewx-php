@@ -31,15 +31,12 @@ final class Tick
     /** Seconds after which the journal is walked in full again, for intervals whose marks were lost. */
     public const CATCH_UP_EVERY = 3600;
 
-    /** The share of PHP's execution limit a tick may take; the rest is for opening and answering. */
-    private const EXECUTION_SHARE = 2 / 3;
-
     private const PRUNED_AT = 'pruned_at';
 
     public function __construct(private readonly Runtime $runtime) {}
 
     /** @param string $trigger Who called: `cron`, `http`, `ingest`, `cli`. */
-    public function run(string $trigger): Outcome
+    public function run(string $trigger, bool $archiveOnly = false): Outcome
     {
         $clock = $this->runtime->clock;
         $config = $this->runtime->config;
@@ -53,6 +50,7 @@ final class Tick
             $this->runtime->log->debug(sprintf('tick (%s): another tick is running', $trigger));
             return Outcome::busy($elapsed());
         }
+        $execution = null;
         try {
             $this->runtime->refresh();
             $config = $this->runtime->config;
@@ -64,7 +62,17 @@ final class Tick
             $live->setMeta(LiveDb::ARCHIVES_KEY, implode(',', array_keys($config->intervals())));
             $live->setMeta('archive_intervals', json_encode($config->intervals(), JSON_THROW_ON_ERROR));
 
-            $budget = Budget::of($clock, $this->timeBudget(), PHP_INT_MAX);
+            $overallBudget = Budget::of($clock, $this->timeBudget(), PHP_INT_MAX);
+            $execution = new ExecutionProfile(
+                $state,
+                $clock,
+                $this->runtime->log,
+                'archive-' . PHP_SAPI,
+                (int) ini_get('max_execution_time'),
+                $config->settings->timeBudget,
+                max(0.0, $overallBudget->timeLeft()),
+            );
+            $budget = Budget::of($clock, $execution->seconds(), PHP_INT_MAX);
             $archives = [];
             $archivers = [];
             foreach ($config->archives as $id => $archive) {
@@ -72,6 +80,7 @@ final class Tick
                     continue;
                 }
                 [$archives[$id], $archiver] = $this->runArchive($archive, $budget->share($config->settings->maxIntervalsPerRun), $live, $state, $started);
+                $execution->checkpoint();
                 if ($archiver !== null) {
                     $archivers[$id] = $archiver;
                 }
@@ -80,7 +89,7 @@ final class Tick
             // go before the archivers close; what the budget has left is theirs.
             $uploads = [];
             try {
-                if ($config->uploads !== []) {
+                if (!$archiveOnly && $config->uploads !== []) {
                     $uploads = $this->runtime->uploads()->run($budget->share(PHP_INT_MAX), $archivers, $started);
                 }
             } finally {
@@ -89,26 +98,55 @@ final class Tick
                 }
             }
             $stations = $this->watchStations($live, $state, $started);
-            $this->prune($live, $started);
-            if (is_file($config->settings->ingestDbPath())) {
-                $this->runtime->ingest()->prune($started);
+            $maintenanceOk = true;
+            $backup = [];
+            if (!$archiveOnly) {
+                $this->prune($live, $started);
+                if (is_file($config->settings->ingestDbPath())) {
+                    $this->runtime->ingest()->prune($started);
+                }
+                $maintenanceOk = \WeewxPhp\Admin\Jobs::run($this->runtime, $budget);
+                $backup = $this->runtime->configPath() === null ? [] : (new \WeewxPhp\Backup\Backups($config->settings))->run($this->runtime);
             }
-            \WeewxPhp\Admin\Jobs::run($this->runtime, $budget);
-
+            $execution->finish($budget->timeLeft() <= 0.05);
+            $execution = null;
+            // Journal ingestion and archive intervals can proceed during analysis reads.
+            $lock->release();
+            $lock = null;
+            $extensions = $archiveOnly ? [] : $this->runtime->extensions($overallBudget);
+            $analytics = ['completed' => 0, 'pending' => 0, 'failed' => 0, 'busy' => 0];
             try {
-                (new Worker($this->runtime))->run(Budget::of($clock, min(2.0, max(0.0, $budget->timeLeft())), PHP_INT_MAX));
+                if (!$archiveOnly) {
+                    $analytics = (new Worker($this->runtime))->run($overallBudget, drain: true);
+                }
             } catch (Throwable $error) {
+                $analytics['failed'] = 1;
                 $this->runtime->log->error('analytics: ' . $error->getMessage());
             }
 
             $failed = array_filter($archives, static fn(array $one): bool => isset($one['error']));
-            $outcome = new Outcome($failed === [] ? Outcome::OK : Outcome::ERROR, $archives, $stations, $elapsed(), $uploads);
+            $outcome = new Outcome($failed === [] && $analytics['failed'] === 0 && $maintenanceOk && ($backup['status'] ?? '') !== 'failed' ? Outcome::OK : Outcome::ERROR, $archives, $stations, $elapsed(), $uploads, $backup, $maintenanceOk, $analytics, $extensions);
             $state->addRun($started, $clock->now(), $trigger, $outcome->toArray());
             $this->runtime->log->info(sprintf('tick (%s): %s', $trigger, self::describe($outcome)));
             return $outcome;
         } finally {
-            $lock->release();
+            try {
+                $execution?->finish(false);
+            } finally {
+                $lock?->release();
+            }
         }
+    }
+
+    /** Called by the maintenance lane under its short archive-writer turn. */
+    public function maintenance(Budget $budget): void
+    {
+        $now = $this->runtime->clock->now();
+        $this->prune($this->runtime->live(), $now);
+        if (is_file($this->runtime->config->settings->ingestDbPath())) {
+            $this->runtime->ingest()->prune($now);
+        }
+        \WeewxPhp\Admin\Jobs::run($this->runtime, $budget);
     }
 
     /**
@@ -129,7 +167,14 @@ final class Tick
             return [['records' => 0, 'error' => $error->getMessage()], null];
         }
         try {
-            $written = $archiver->processReplay($now, $budget);
+            // Close the newest intervals before spending the remaining turn on history.
+            $written = $archiver->processDue(
+                $now,
+                Budget::of($this->runtime->clock, min(2.0, max(0.0, $budget->timeLeft())), 3),
+                $replace,
+                max(0, $now - $this->runtime->config->settings->archiveDelay - 3 * $config->interval($this->runtime->config->settings)),
+            );
+            $written += $archiver->processReplay($now, $budget);
             // A repair owns its day summaries until its durable cursor is done.
             if ($live->replay()->job($config->id) !== null) {
                 $state->noteRun($config->id, $now, $written, $archiver->archive()->lastTimestamp());
@@ -208,12 +253,9 @@ final class Tick
     /** Seconds a tick may spend: the configured budget, capped under PHP's own limit. */
     private function timeBudget(): float
     {
-        $budget = (float) $this->runtime->config->settings->timeBudget;
-        $limit = (int) ini_get('max_execution_time');
-        if ($limit > 0) {
-            $budget = min($budget, $limit * self::EXECUTION_SHARE);
-        }
-        return $budget;
+        $requestStart = $_SERVER['REQUEST_TIME_FLOAT'] ?? null;
+        $elapsed = PHP_SAPI !== 'cli' && is_float($requestStart) ? max(0.0, microtime(true) - $requestStart) : 0.0;
+        return ExecutionProfile::limit($this->runtime->config->settings->timeBudget, (int) ini_get('max_execution_time'), $elapsed);
     }
 
     private static function describe(Outcome $outcome): string

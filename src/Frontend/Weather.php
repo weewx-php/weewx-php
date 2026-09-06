@@ -16,6 +16,7 @@ final class Weather
 {
     private ?ArchiveReader $reader = null;
     private ?Cache $cache = null;
+    private ?\WeewxPhp\Extension\Registry $extensions = null;
     /** @var array<string, Value|Series|Report> */
     private array $memo = [];
     private readonly Clock $clock;
@@ -50,6 +51,21 @@ final class Weather
     public function configuration(): ArchiveConfig
     {
         return $this->archiveConfig;
+    }
+
+    public function hasTag(string $name): bool
+    {
+        return ($this->extensions ??= new \WeewxPhp\Extension\Registry($this->config))->has($name);
+    }
+
+    /** Read a namespaced extension tag. Readers must use prepared local data only.
+     * @param array<string, mixed> $options
+     */
+    public function tag(string $name, array $options = []): Value|Series|Report
+    {
+        $registry = $this->extensions ??= new \WeewxPhp\Extension\Registry($this->config);
+        $result = $registry->read($name, $this->archiveConfig, $this->now, $options);
+        return $this->outputProfile?->apply($result, $result instanceof Report ? '' : $result->observation) ?? $result;
     }
 
     public function archive(string $id): self
@@ -251,8 +267,7 @@ final class Weather
         if ($target !== null) {
             (new Value(null, $unit, $group))->to($target);
         }
-        $places = $this->outputProfile->decimals[$observation] ?? $this->outputProfile->decimals[$target ?? '']
-            ?? $this->outputProfile->decimals[$group ?? ''] ?? ($group === 'group_count' ? 0 : 1);
+        $places = ($this->outputProfile ?? new Output())->places($group, $target, $observation);
         return ['type' => $target, 'label' => $this->outputProfile->labels[$target ?? ''] ?? Value::label($target), 'format' => '%.' . $places . 'f'];
     }
 

@@ -1,0 +1,7 @@
+{
+  "theme": "basic",
+  "schema_version": 1,
+  "fields": [
+    {"key": "language", "type": "select", "label": "Language", "default": "en", "options": {"en": "English", "de": "Deutsch"}}
+  ]
+}

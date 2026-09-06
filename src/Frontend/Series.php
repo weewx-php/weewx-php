@@ -223,6 +223,7 @@ final class Series implements IteratorAggregate, JsonSerializable
     public function jsonSerialize(): array
     {
         return ['points' => $this->points, 'unit' => $this->unit, 'group' => $this->group,
+            'unitLabel' => $this->value(0)->unitLabel(), 'decimals' => ($this->output ?? new Output())->places($this->group, $this->unit, $this->observation),
             'status' => $this->status, 'asOf' => $this->asOf, 'computedAt' => $this->computedAt, 'delta' => $this->delta]
             + ($this->fallback === [] ? [] : ['fallback' => $this->fallback, 'fallbackSource' => 'hardware']);
     }

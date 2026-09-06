@@ -13,6 +13,17 @@ use WeewxPhp\Weewx\UnitSystem;
 
 final class QualityTest extends TestCase
 {
+    public function testNegativeRainAmountsAndRatesAreRejectedWithoutOptionalQcRules(): void
+    {
+        $quality = new Quality([], null, []);
+        $record = $quality->check(['usUnits' => 1, 'rain' => -1, 'yearRain' => -2, 'rainRate' => -3, 'outTemp' => -4]);
+        self::assertNull($record['rain']);
+        self::assertNull($record['yearRain']);
+        self::assertNull($record['rainRate']);
+        self::assertSame(-4, $record['outTemp']);
+        self::assertSame(['rain' => 1, 'yearRain' => 1, 'rainRate' => 1], $quality->dropped());
+    }
+
     public function testCorrectionsFollowTheSenderAndTouchOnlyNumbers(): void
     {
         $quality = new Quality([], null, [

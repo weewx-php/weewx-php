@@ -1,0 +1,21 @@
+{
+  "Language": "Sprache",
+  "English": "English",
+  "Deutsch": "Deutsch",
+  "Weather station": "Wetterstation",
+  "No weather data": "Keine Wetterdaten",
+  "Live data": "Live-Daten",
+  "Live data unavailable": "Live-Daten nicht erreichbar",
+  "Measurement": "Messwert",
+  "Value": "Wert",
+  "Measured at": "Messzeit",
+  "Temperature": "Temperatur",
+  "Humidity": "Luftfeuchte",
+  "Pressure": "Luftdruck",
+  "Wind": "Wind",
+  "Gusts": "Böen",
+  "Wind direction": "Windrichtung",
+  "Rain rate": "Regenrate",
+  "Stale": "Veraltet",
+  "Y-m-d H:i:s": "d.m.Y H:i:s"
+}

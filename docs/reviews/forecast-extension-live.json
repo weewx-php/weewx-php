@@ -1,0 +1,24 @@
+{
+    "tested_at_utc": "2026-09-06T16:35:55+00:00",
+    "host": "ALL-INKL",
+    "php": "8.5.1-nmm1",
+    "forecast_status": "ready",
+    "forecast_days_available": 7,
+    "today": "2026-09-06",
+    "hourly_points": 48,
+    "worker": {
+        "forecast/archive-9434e02a0d879b1d": {
+            "status": "fresh",
+            "fetched_at": 1788712328
+        }
+    },
+    "settings_in_menu": true,
+    "archive_settings_form": true,
+    "legacy_sections_removed": true,
+    "preserved": {
+        "days": 7,
+        "every": 3600,
+        "timeout": 8
+    },
+    "climate_installed": false
+}

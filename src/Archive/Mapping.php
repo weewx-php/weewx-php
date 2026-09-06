@@ -172,6 +172,83 @@ final class Mapping
         return !$this->config->takesIndoor($sender) && in_array($source, self::INDOOR, true) ? null : $source;
     }
 
+    /** Calculation inputs of the selected rain gauge, independent of archive columns.
+     * @return list<string>
+     */
+    public function rainSources(string $station): array
+    {
+        if (!$this->config->selects($station)) {
+            return [];
+        }
+        // An explicit rain writer takes precedence over legacy snapshot mappings
+        // from other stations. Never combine two physical gauges.
+        $explicit = null;
+        foreach ($this->config->fields as $sender => $fields) {
+            foreach ($fields as $source => $target) {
+                if ($target === 'rain') {
+                    $explicit = [$sender, $source];
+                }
+            }
+        }
+        if ($explicit !== null && $explicit[0] !== $station) {
+            return [];
+        }
+        if ($explicit === null) {
+            $snapshotWriters = [];
+            foreach ($this->config->fields as $sender => $fields) {
+                if (!$this->config->selects($sender)) {
+                    continue;
+                }
+                foreach (RainCounter::FIELDS as $counter) {
+                    if (($fields[$counter] ?? null) === $counter) {
+                        $snapshotWriters[$sender] = true;
+                    }
+                }
+            }
+            if ($snapshotWriters !== [] && (count($snapshotWriters) !== 1 || !isset($snapshotWriters[$station]))) {
+                return [];
+            }
+        }
+        $selected = $explicit[1] ?? null;
+        if ($selected !== null && !in_array($selected, [...RainCounter::FIELDS, 'rain'], true)) {
+            // A custom counter is an independent sensor, even inside the same upload.
+            return \WeewxPhp\Measurement\Catalog::kind($selected, $this->config->measurementKinds) === 'rain_counter'
+                ? [$selected] : [];
+        }
+        $enabled = $selected !== null;
+        foreach (['rain', ...RainCounter::FIELDS] as $source) {
+            $target = $this->target($station, $source);
+            if ($target === $source || $target === 'rain') {
+                $enabled = true;
+            }
+        }
+        if (!$enabled) {
+            return [];
+        }
+        $inputs = [];
+        foreach (RainCounter::FIELDS as $source) {
+            // An explicit exclusion is respected also for auxiliary inputs.
+            if (($this->config->fields[$station][$source] ?? null) === '-') {
+                continue;
+            }
+            $inputs[] = $source;
+        }
+        return $inputs;
+    }
+
+    /** @return array<string, mixed> */
+    public function rainInputs(Packet $packet): array
+    {
+        $inputs = [];
+        if ($packet->dialect === null) {
+            foreach ($this->rainSources($packet->sender) as $source) {
+                $this->verifyPacketField($packet, $source);
+                $inputs[$source] = $packet->data[$source] ?? null;
+            }
+        }
+        return $inputs;
+    }
+
     /**
      * One packet in this archive's column names, with `dateTime`,
      * `usUnits` and, for an archive-kind packet, `interval`; or null when
@@ -199,7 +276,7 @@ final class Mapping
                     // A selected cumulative rain source feeds the existing per-sender
                     // delta calculation. The counter itself is never stored as rain.
                     if ($target === 'rain' && \WeewxPhp\Measurement\Catalog::kind($source, $this->config->measurementKinds) === 'rain_counter') {
-                        $target = 'totalRain';
+                        $value = null;
                     }
                     $data[$target] = $value;
                 }
@@ -232,6 +309,9 @@ final class Mapping
                 continue;
             }
             $this->verifyPacketField($packet, $raw);
+            if ($target === 'rain' && \WeewxPhp\Measurement\Catalog::kind($raw, $this->config->measurementKinds) === 'rain_counter') {
+                $value = null;
+            }
             $data[$target] = $value;
         }
 

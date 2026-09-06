@@ -6,6 +6,11 @@ Umrechnung und Formatierung ändern weder das Rezept noch seinen Cacheeintrag.
 
 ## Ein Ausgabeprofil pro Theme
 
+For visitor-selectable units, use `$theme->output()` instead of fixed unit
+overrides. See [the integration example](theme-cookbook.md#visitor-unit-selection)
+and [profile reference](display-units.md). The example below defines a fixed
+output profile explicitly.
+
 ```php
 use WeewxPhp\Frontend\Output;
 

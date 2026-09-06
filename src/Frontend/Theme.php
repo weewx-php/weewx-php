@@ -23,20 +23,35 @@ final class Theme
         public readonly array $labels = [],
         public readonly array $extras = [],
         public readonly array $summaries = [],
+        public readonly UnitPreferences $units = new UnitPreferences(),
     ) {}
 
     /** Load registered settings as typed Extras without executing theme code. */
-    public static function configured(string $path, ?string $id = null, string $language = 'en', ?string $directory = null): self
+    public static function configured(string $path, ?string $id = null, ?string $language = null, ?string $directory = null, ?UnitPreferences $units = null): self
     {
         $file = \WeewxPhp\Config\ConfFile::read($path);
         $resolved = realpath($path);
         $config = \WeewxPhp\Config\ConfigReader::read($file, dirname($resolved === false ? $path : $resolved));
-        $id ??= $file->root()->optionalSection('Themes')?->optional('active')?->string();
-        if ($id === null) {
-            return new self(language: $language);
-        }
-        $registry = new \WeewxPhp\Admin\ThemeRegistry($directory ?? dirname(__DIR__, 2) . '/themes');
-        return new self(name: $id, language: $language, extras: $registry->settings($id, $file, $config));
+        $id ??= $file->root()->optionalSection('Themes')?->optional('active')?->string() ?? 'basic';
+        $registry = \WeewxPhp\Admin\ThemeRegistry::configured($path, $directory, $file);
+        $extras = $registry->settings($id, $file, $config);
+        $themes = $file->root()->optionalSection('Themes');
+        $selected = $themes?->optionalSection($id)?->optional('language')?->string()
+            ?? $themes?->optional('language')?->string() ?? $extras['language'] ?? 'en';
+        $language = $registry->language($id, $language ?? (is_string($selected) ? $selected : 'en'));
+        $units ??= new UnitPreferences($themes?->optional('units')?->string() ?? 'metric');
+        return new self(name: $id, language: $language, texts: $registry->texts($id, $language), extras: $extras, units: $units);
+    }
+
+    public function output(?Output $format = null): Output
+    {
+        return $this->units->output($format ?? new Output($this->language === 'de' ? 'de' : 'en'));
+    }
+
+    /** @return array<string, string> Selection ID => localized label, with English fallback. */
+    public function unitOptions(): array
+    {
+        return array_map($this->text(...), ['station' => 'Station default'] + UnitPreferences::PROFILES);
     }
 
     public function text(string $message, ?string $context = null): string

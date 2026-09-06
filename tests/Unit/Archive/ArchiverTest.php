@@ -351,6 +351,35 @@ final class ArchiverTest extends TestCase
         self::assertCount(1, $homeless);
     }
 
+    public function testUnmappedEcowittAnnualCounterRecoversRainWithoutAddingColumns(): void
+    {
+        $config = Archives::config(database: $this->dir . '/counter.sdb', fields: ['ecowitt' => ['dayRain' => 'rain', 'outTemp' => 'outTemp']], explicitMapping: true);
+        $t = strtotime('2026-09-05 18:00:00 +0200');
+        foreach ([[$t, '1.000', '0.100'], [$t + 43200, '1.300', '0.150']] as [$when, $year, $day]) {
+            $data = \WeewxPhp\Ingest\Parser::observation(
+                \WeewxPhp\Ingest\Protocol::Ecowitt,
+                ['PASSKEY' => str_repeat('A', 32), 'dateutc' => 'now', 'yearlyrainin' => $year, 'dailyrainin' => $day, 'tempf' => '70'],
+                $when,
+            );
+            $this->live->add(new Packet($when, $data->units, $data->data, 'ecowitt', 'ecowitt', 'test'), ['kirchdorf'], 300, now: $when);
+        }
+        $archiver = $this->archiver($config);
+        $built = $archiver->build($t + 43200);
+        self::assertNotNull($built);
+        self::assertEqualsWithDelta(7.62, $built->record['rain'], 1e-9);
+        self::assertNull($built->record['rainRate']);
+        self::assertArrayNotHasKey('yearRain', $built->record);
+        self::assertFalse($archiver->archive()->schema()->hasColumn('yearRain'));
+        self::assertTrue($archiver->store($built));
+        self::assertFalse($archiver->store($built));
+        $reader = \WeewxPhp\Db\Sqlite::readOnly($config->database);
+        self::assertSame(1, $reader->scalar('SELECT COUNT(*) FROM weewx_rain_evidence'));
+        self::assertSame('yearRain', $reader->scalar('SELECT counter FROM weewx_rain_evidence'));
+        self::assertEqualsWithDelta(7.62, $reader->scalar('SELECT SUM(rain) FROM archive'), 1e-9);
+        $reader->close();
+        $archiver->close();
+    }
+
     // -- helpers ----------------------------------------------------------
 
     private function archiver(?ArchiveConfig $config = null): Archiver

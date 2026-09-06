@@ -56,12 +56,12 @@ final class HardwareHistory
     /** Daily candidates include days for which the fixed archive has no records at all.
      * @return Generator<int, array<string, mixed>>
      */
-    public function days(string $observation, string $table, int $after, int $end, ReadBudget $budget): Generator
+    public function days(string $observation, string $table, int $after, int $end, ReadBudget $budget, int $limit = 512): Generator
     {
         $sql = "SELECT dateTime FROM $table WHERE dateTime > ? AND dateTime < ?
             UNION SELECT day AS dateTime FROM weewx_hardware WHERE field = ? AND day > ? AND day < ?
-            ORDER BY dateTime LIMIT 512";
-        yield from $this->reader->rows($sql, [$after, $end, self::field($observation), $after, $end], $budget);
+            ORDER BY dateTime LIMIT ?";
+        yield from $this->reader->rows($sql, [$after, $end, self::field($observation), $after, $end, $limit], $budget);
     }
 
     /** Whole logger spans available beyond the requested grid, never allocated to a bucket.

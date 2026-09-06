@@ -6,8 +6,8 @@ namespace WeewxPhp\Ingest;
 
 use Throwable;
 use WeewxPhp\Config\IngestConfig;
+use WeewxPhp\Tick\Dispatcher;
 use WeewxPhp\Tick\Runtime;
-use WeewxPhp\Tick\Tick;
 
 /** Thin PHP/Apache adapter. The web server owns TLS and request read timeouts. */
 final class Http
@@ -18,6 +18,7 @@ final class Http
         try {
             $path = getenv('WEEWX_PHP_CONF');
             $runtime = Runtime::boot($path === false || $path === '' ? $projectDir . '/weewx-php.conf' : $path);
+            $runtime->nonBlockingIngest();
             $server = self::server();
             [$peer, $https] = self::connection($server, $runtime->config->ingest);
             $script = $server['SCRIPT_NAME'] ?? '';
@@ -58,16 +59,9 @@ final class Http
             );
             header('Content-Length: ' . strlen($response->body));
             $response->send();
-            // Flush the console's acknowledgement before archive work. Pending,
-            // ignored and blocked senders never trigger a tick.
-            if ($receiver->wrote() && $runtime->config->ingest->tickMode === 'auto'
-                && function_exists('fastcgi_finish_request')) {
-                ignore_user_abort(true);
-                // Finish the request before even waiting for the tick-claim lock.
-                // Other SAPIs and external mode rely on the scheduled tick.
-                if (fastcgi_finish_request() && $runtime->ingest()->claimTick($runtime->clock->now())) {
-                    (new Tick($runtime))->run('ingest');
-                }
+            if ($receiver->wrote() && $runtime->config->ingest->tickMode === 'auto') {
+                // Queue only. No calculations, archive writes or network uploads in this request.
+                (new Dispatcher($runtime))->request();
             }
         } catch (Throwable $error) {
             error_log('weewx-php ingest failed (' . $error::class . ')');

@@ -39,9 +39,59 @@ client address is `127.0.0.1` or `::1`. It does not enable public HTTP access.
   stations and configure location, timezone and interval. Databases managed by
   the admin must reside beneath the private data directory. A connected archive
   starts disabled, with no station assignments.
+  Connecting detects storage units from the existing `archive.usUnits` values;
+  empty archives and archives with mixed or unknown units are rejected. The
+  storage-unit selector applies only when creating a new archive.
 - **Fields:** choose one archive. Its stations appear together, in separate
   sections. Each row connects one source field to a compatible archive column.
   Unassigned fields remain unassigned when new uploads arrive.
+
+### Import an existing archive
+
+**Upload file** transfers a SQLite archive in 1 MiB blocks, up to 64 GiB. Pause
+and resume are supported; after reloading the page, select the same file to
+resume its acknowledged offset. **Discard import** removes its temporary data.
+PHP's multipart upload limit does not constrain the whole file, but the host
+must accept each block and provide sufficient disk space. Host/FPM request
+timeouts still apply to inspection and copying a webspace database.
+
+**Search webspace** finds unconnected WeeWX SQLite files, excluding linked
+archives, import staging and this installation's backup directory. The default
+scope is the document-root parent when it contains the configuration directory;
+otherwise it is the configuration directory. `WEEWX_PHP_WEBSPACE` can specify
+the search root explicitly. Resolved symlinks must remain inside that root.
+Search advances in batches and reports truncated results at its safety limits
+(100 candidates, 20,000 directories or 3 MiB cursor state).
+
+Selected webspace files are copied into private import storage using SQLite's
+online backup API, including committed WAL data. Their existing paths remain
+untouched and are excluded from later searches after connection. Browser uploads
+must be consistent standalone SQLite files, for example a WeeWX/SQLite snapshot.
+
+Archive IDs are generated automatically. Storage units are read from
+`archive.usUnits`; existing data is not relabelled. New archives default to US;
+incoming measurements are converted into the selected storage units.
+
+Choose the archive timezone or use **Detect automatically**. Detection tests
+all IANA zones against up to two completed summary days, grouping zones with
+identical day boundaries to avoid repeating calculations. Fractional offsets
+and DST transitions are supported. Equivalent zones remain selectable: the
+database cannot prove an IANA name, and a summer-only archive cannot distinguish
+zones by winter behavior. With no usable matching summaries, select manually.
+
+Connecting checks sums, counts, weights and day boundaries. A mismatch or missing
+summary data triggers a resumable daily-summary rebuild before connection.
+Raw archive rows remain unchanged. Known summary extrema are reassigned using
+their timestamps; other high-resolution extrema absent from archive records
+cannot be recovered. **No original-file backup is created on the webspace.**
+Only old summary tables are retained temporarily during rebuilding, then removed.
+The staged database becomes the archive without another full copy. The archive
+starts disabled with no station assignments.
+
+On the 7.2 MiB, 17,963-record reference archive, the two-day check took 114 ms and
+zone detection 116 ms locally. Sample cost depends on the selected days' records
+and columns; unit validation can scan the entire archive. A complete rebuild
+scales with archive history and runs in resumable batches of up to ten days.
 
 Choose **New column…** directly in a source's destination selector. Known fields
 provide their measurement type. For an unknown field, also supply its type and
@@ -70,21 +120,50 @@ assignments. The legacy primary is resolved in journal reception order.
 
 ## Database and column history
 
-The Fields view shows the archive record count, oldest and newest timestamps and
-their age. Every selected destination shows its own non-NULL value count and
-first/last value timestamps. Zero is a stored value. Empty columns are identified
-explicitly. Choosing a different destination loads its history without saving.
+Archive settings group general options, location, archive structure and
+stations. Forecast settings belong to the installed extension's Admin menu.
+Elevation uses separate numeric and m/ft controls; intervals are
+entered in minutes. Existing archives show fixed timezone, interval and storage
+units as read-only values. The server still validates structural changes.
 
-Counts come from the actual archive, using a single read-only aggregate for the
-displayed destinations. They are not inferred from journal counters or daily
-summary counts. Large archives therefore require an archive scan for this view.
+The explicit place search uses Open-Meteo's GeoNames geocoding endpoint. Selecting
+a result fills the place name and coordinates. It fills elevation only when that
+field is empty; a configured station elevation is retained. Place elevation may
+differ from the console's pressure-sensor elevation, so review before saving.
+An empty archive may also receive the result's timezone; an existing archive's
+timezone is never silently replaced. Queries require admin authentication and
+CSRF, are cached for 24 hours and rate limited; no search happens while typing.
+
+Station connection details show reception status, protocol, transport, hostname,
+port and path separately. They use the configured `Ingest.public_url`, preserving
+custom ports and installation subdirectories. HTTP without an explicit port means
+80; HTTPS means 443. Configure HTTP for consoles without TLS support. Point the
+console at the supplied Ecowitt path, not the website's root; enable `[Ingest]`
+reception before expecting stations to appear.
+
+### Ticks on page visits
+
+`visit_tick_enabled` (default true) is available in Settings. The bundled
+theme requests `/visit.php` after loading and once per minute while visible.
+The endpoint only queues background work and returns 204; no station packet
+is required. A shared nonblocking file lock throttles all visitors to one
+wake-up per minute. Existing archive records do not become new measurements.
+Cron remains necessary for a guaranteed schedule when no visitors or packets
+arrive. Custom themes can include `assets/visit.js`.
+
+In field assignment, **Rain calculation** identifies counters used as
+calculation inputs without their own archive column. Assigning a gauge's
+`rain` or cumulative rain observation selects its counter family. Explicit
+exclusions are respected. Rolling hourly/24-hour totals and rates cannot be
+mapped as interval rainfall. Custom sensors keep their explicitly declared
+measurement semantics and do not borrow counters from another gauge.
 
 **Mapping history** shows saved source assignments and their effective periods.
 It is configuration history, not proof of the producer of each individual row.
 Imported records and the initial baseline have **Source unknown** unless later
 recorded assignments provide evidence. Changing today's mapping never attributes
-undocumented old records to today's station. The weather database contains no
-new administration or provenance tables.
+undocumented old records to today's station. Rain gap evidence is stored
+separately from the standard archive columns.
 
 ## Languages
 
@@ -116,7 +195,7 @@ declaration. Supported types are `text`, `boolean`, `integer`, `number`, `select
 Theme labels are resolved in `themes/<id>/locales/<language>.json`, with English
 fallback. Settings are stored under `[Themes] / [[<id>]]` in the configuration.
 The field names `action`, `csrf`, `revision`, `theme`, `activate` and
-`schema_version` are reserved. Archive-field values use `archive_id:column`.
+`schema_version` and `directory` are reserved. Archive-field values use `archive_id:column`.
 
 Load typed settings in a theme through the shared adapter:
 
@@ -126,9 +205,10 @@ $showWind = $theme->extras['show_wind']; // bool
 $days = $theme->extras['days'];         // int
 ```
 
-Omit the theme ID to use `[Themes] active`. The adapter loads settings and render
-context; the public entry point remains responsible for choosing its renderer.
-The demo theme registers and uses its default chart range as an example.
+Omit the theme ID to use `[Themes] active` (default: `basic`). The public entry
+point loads that theme’s renderer and JSON snapshot. External package directories
+can be set under `[Themes] / [[<id>]] / directory`, relative to the configuration.
+See [installation and package contract](themes.md).
 
 ## Operations and recovery
 
@@ -153,6 +233,9 @@ processing snapshots. The private pending-operation record temporarily holds the
 desired full configuration and is removed after successful installation.
 
 Archives expose backup, daily-summary verification and journal rebuild jobs.
+The central **Backups** page manages full daily installation packages and
+authenticated downloads; **Settings** controls daily scheduling and retention
+(default three days). See [backup and restore](backups.md).
 The existing tick processes queued work. Verification and rebuild advance by
 day; the PHP SQLite backup API performs one complete copy. Backup paths are
 shown in the archive's maintenance history. Rebuild ranges must be in the past
@@ -171,3 +254,16 @@ php bin/weewx-php admin apply mapping.save_all draft.json
 Undeclared native source keys use `native:<field>` and require a measurement kind
 and source unit in their column definition. See the integration tests in
 `tests/Unit/Admin/AdminTest.php` for complete command examples.
+
+## Extensions
+
+**Extensions** lists packages from the organization’s
+[reviewed catalog](https://github.com/weewx-php/extension-catalog). Install a
+package, then activate it. Updates retain its options and activation state.
+Deactivation removes its tags and worker from subsequent requests; removal
+also removes its configuration. Package data and old code versions are retained.
+
+All actions require the existing authenticated session and CSRF token. Downloads
+use fixed GitHub commit URLs and per-file SHA-256 verification. PHP code is not
+loaded during installation or activation; it joins the normal tick and tag
+registry on subsequent application requests. See [extensions](extensions.md).

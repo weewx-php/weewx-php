@@ -17,7 +17,7 @@ final class Report implements JsonSerializable
         public readonly array $values,
         public readonly array $meta,
         public readonly string $status = 'ready',
-        private readonly ?Output $output = null,
+        public readonly ?Output $output = null,
     ) {}
 
     public function value(string $name): Value

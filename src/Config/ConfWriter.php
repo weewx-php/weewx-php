@@ -41,7 +41,8 @@ final class ConfWriter
     private function section(Section $section): void
     {
         $indent = str_repeat(self::INDENT, $section->depth());
-        foreach ($section->keys() as $key) {
+        // New values must precede child headers or they change scope on read.
+        foreach (array_merge(array_keys($section->values()), array_keys($section->sections())) as $key) {
             foreach ($section->comments($key) as $line) {
                 $this->out[] = $indent . self::innerComment($line);
             }
