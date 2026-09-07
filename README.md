@@ -52,7 +52,9 @@ of the measured archive. See the [data-source comparison](docs/climate-sources.m
 
 ## Getting it running
 
-For updates of an existing All-Inkl installation, use the
+The admin can install [published core releases](docs/core-updates.md), with an
+optional beta channel. For initial deployment or an externally managed update
+of an existing All-Inkl installation, use the
 [FTPS core deployment script](docs/deploy-all-inkl.md). It preserves configuration,
 data, installed extensions and optional themes.
 
@@ -237,14 +239,19 @@ written outside `/tmp`:
 tests/run.sh
 ```
 
-That is three things. `lint` is php-cs-fixer and PHPStan at its strictest
-level. `unit` is PHPUnit. `conformance` is a Python harness in a container
+`lint` is php-cs-fixer and PHPStan at its strictest level. `unit` is PHPUnit.
+`frontend-js` runs the JavaScript tests, and `deploy` checks the deployment tools.
+`conformance` is a Python harness in a container
 that has WeeWX 5.5 installed: it runs the PHP side and WeeWX on the same
 inputs and compares, exactly where the code is a transcription and to a
 stated tolerance where it cannot be. Which checks there are and what each
 one proves is in [docs/design.md](docs/design.md). With a checkout of
 weewx-evo beside this repository, the uploads check compares the services
 WeeWX does not have with its modules as well.
+
+GitHub CI runs these checks on branch pushes and pull requests. Tagged
+[stable and beta releases](docs/core-updates.md#publish-a-release) must pass
+the same checks and a package installation test before publication.
 
 The separate Python collector can also be tested against PHP in two Docker
 containers with real Simulator workers, TLS and outage recovery. See

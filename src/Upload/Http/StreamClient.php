@@ -30,6 +30,8 @@ final class StreamClient implements HttpClient
             $options['content'] = $request->body;
         }
         $context = stream_context_create(['http' => $options]);
+        // Non-HTTP streams do not populate response headers.
+        $http_response_header = [];
         $body = @file_get_contents($request->url, false, $context, 0, $request->maxResponseBytes === null ? null : max(1, $request->maxResponseBytes + 1));
         if ($body === false) {
             $error = error_get_last();
@@ -48,6 +50,13 @@ final class StreamClient implements HttpClient
         if (preg_match('#^HTTP/\S+\s+(\d{3})#', $statusLine, $found) === 1) {
             $status = (int) $found[1];
         }
-        return new HttpResponse($status, $body);
+        $headers = [];
+        foreach ($http_response_header as $line) {
+            if (str_contains($line, ':')) {
+                [$name, $value] = explode(':', $line, 2);
+                $headers[strtolower(trim($name))] = trim($value);
+            }
+        }
+        return new HttpResponse($status, $body, $headers);
     }
 }

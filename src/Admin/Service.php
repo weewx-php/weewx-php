@@ -487,6 +487,13 @@ final class Service
             throw new Problem('error.input', 'language');
         }
         self::section($file->root(), 'Admin')->set('language', $language);
+        if (array_key_exists('update_channel', $input)) {
+            $channel = Input::text($input, 'update_channel');
+            if (!in_array($channel, ['stable', 'beta'], true)) {
+                throw new Problem('error.input', 'update_channel');
+            }
+            self::section($file->root(), 'Admin')->set('update_channel', $channel);
+        }
     }
 
     /** @param array<string, mixed> $input */

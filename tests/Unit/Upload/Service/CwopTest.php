@@ -12,6 +12,7 @@ use WeewxPhp\Upload\Kind;
 use WeewxPhp\Upload\Rejected;
 use WeewxPhp\Upload\Service\Cwop;
 use WeewxPhp\Upload\UploadError;
+use WeewxPhp\Version;
 use WeewxPhp\Weewx\Units;
 
 final class CwopTest extends TestCase
@@ -24,16 +25,16 @@ final class CwopTest extends TestCase
         $mbar = (float) Units::convert(29.921, 'inHg', 'mbar');
 
         self::assertSame(
-            sprintf("DW1234>APZPHP,TCPIP*:@260850z4827.58N/01139.23E_180/011g018t068r001p005P005b%05dh61L301.weewx-php-0.1.0\r\n", (int) ($mbar * 10 + 0.5)),
+            sprintf("DW1234>APZPHP,TCPIP*:@260850z4827.58N/01139.23E_180/011g018t068r001p005P005b%05dh61L301.weewx-php-%s\r\n", (int) ($mbar * 10 + 0.5), Version::STRING),
             $upload->packet($record),
         );
-        self::assertSame("user DW1234 pass -1 vers weewx-php 0.1.0\r\n", $upload->login());
+        self::assertSame('user DW1234 pass -1 vers weewx-php ' . Version::STRING . "\r\n", $upload->login());
     }
 
     public function testAMissingReadingIsDotsOfTheSameWidth(): void
     {
         $packet = $this->cwop()->packet(['dateTime' => 1_787_734_200, 'usUnits' => 1]);
-        self::assertStringEndsWith("_.../...g...t...r...p...P...b.....h...weewx-php-0.1.0\r\n", $packet);
+        self::assertStringEndsWith('_.../...g...t...r...p...P...b.....h...weewx-php-' . Version::STRING . "\r\n", $packet);
     }
 
     public function testTheEdgesOfTheFormat(): void
@@ -74,7 +75,7 @@ final class CwopTest extends TestCase
         self::assertSame('cwop.aprs.net:23', $posted->note);
         self::assertSame(['cwop.aprs.net', 'cwop.aprs.net'], array_column($sockets->opened, 'host'));
         self::assertSame([14580, 23], array_column($sockets->opened, 'port'));
-        self::assertStringStartsWith("user DW1234 pass -1 vers weewx-php 0.1.0\r\nDW1234>APZPHP,TCPIP*:@", $connection->written);
+        self::assertStringStartsWith('user DW1234 pass -1 vers weewx-php ' . Version::STRING . "\r\nDW1234>APZPHP,TCPIP*:@", $connection->written);
         self::assertTrue($connection->closed);
 
         $nobody = $this->cwop((new FakeSocketFactory())->queue(new Rejected('a'))->queue(new Rejected('b')));

@@ -76,7 +76,9 @@ final class Controller
                             );
                         }
                     }
-                    if (str_starts_with($action, 'extension.')) {
+                    if (str_starts_with($action, 'core.')) {
+                        (new CoreUpdateService($this->path, $this->now, $this->http ?? \WeewxPhp\Upload\Http\Http::client()))->execute($action, $post);
+                    } elseif (str_starts_with($action, 'extension.')) {
                         (new ExtensionService($this->path, $this->now, $this->http ?? \WeewxPhp\Upload\Http\Http::client()))->execute($action, $post);
                     } elseif (str_starts_with($action, 'theme.') && $action !== 'theme.save') {
                         (new ThemeService($this->path, $this->now, $this->http ?? \WeewxPhp\Upload\Http\Http::client()))->execute($action, $post);
@@ -92,6 +94,8 @@ final class Controller
                         'theme.disable', 'extension.disable' => 'disabled',
                         'theme.remove', 'extension.remove' => 'removed',
                         'theme.refresh', 'extension.refresh' => 'refreshed',
+                        'core.check' => 'checked',
+                        'core.install' => 'updated',
                         default => '',
                     };
                     if ($result !== '') {

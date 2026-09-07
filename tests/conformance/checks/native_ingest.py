@@ -74,6 +74,15 @@ def run(ctx: Context) -> None:
         except urllib.error.HTTPError as error:
             return error.code, json.loads(error.read())
 
+    def retry_request() -> tuple[int, dict]:
+        # Keep event IDs and payloads unchanged so retries must preserve native idempotency.
+        for attempt in range(10):
+            answer = request()
+            if answer != (503, {"version": 1, "status": "error", "error": "unavailable"}):
+                return answer
+            time.sleep(0.02 * (attempt + 1))
+        raise Failure("Native storage remained unavailable after retries")
+
     try:
         for _ in range(100):
             try:
@@ -91,7 +100,7 @@ def run(ctx: Context) -> None:
                 "ambiguous native credentials accepted")
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-            answers = list(pool.map(lambda _: request(), range(8)))
+            answers = list(pool.map(lambda _: retry_request(), range(8)))
         require(all(code == 200 and answer["results"][0]["status"] == "pending" for code, answer in answers),
                 "concurrent discovery failed")
         discovered = cli("stations", collector).splitlines()
@@ -99,7 +108,7 @@ def run(ctx: Context) -> None:
         cli("adopt", collector, station, "Simulator")
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-            answers = list(pool.map(lambda _: request(), range(8)))
+            answers = list(pool.map(lambda _: retry_request(), range(8)))
         require(all(code == 200 for code, _ in answers), "concurrent native write failed")
         require(all(answer["limits"]["max_receipts"] == 5000000 for _, answer in answers),
                 "configured native receipt capacity was not advertised")

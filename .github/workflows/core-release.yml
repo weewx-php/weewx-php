@@ -1,0 +1,73 @@
+name: Core release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+
+  package:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Build test images
+        run: docker compose -f tests/docker/compose.yml build unit
+      - name: Build update package
+        run: |
+          mkdir -m 0777 dist
+          docker compose -f tests/docker/compose.yml run --rm -v "$PWD/dist:/out" unit php scripts/build_core_release.php /out/weewx-php-core.json "$RELEASE_TAG" /out/weewx-php-core.zip
+      - name: Install and boot the release package
+        run: |
+          docker compose -f tests/docker/compose.yml run --rm -v "$PWD/dist:/release:ro" -e WEEWX_CORE_PACKAGE=/release/weewx-php-core.json -e WEEWX_CORE_ZIP=/release/weewx-php-core.zip unit /opt/build/vendor/bin/phpunit --configuration phpunit.xml --filter 'testReleasePackageInstallsAndBootsFromDisk|testInstallArchiveContainsOnlyRuntimeAndBoots'
+      - name: Record package checksum
+        working-directory: dist
+        run: sha256sum weewx-php-core.json weewx-php-core.zip > SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: core-release
+          path: |
+            dist/weewx-php-core.json
+            dist/weewx-php-core.zip
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: scripts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: core-release
+          path: dist
+      - name: Publish verified release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: sh scripts/publish_core_release.sh

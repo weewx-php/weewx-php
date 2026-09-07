@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Docker checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Build test images
+        run: docker compose -f tests/docker/compose.yml build unit deploy conformance
+      - name: Lint and static analysis
+        run: docker compose -f tests/docker/compose.yml run --rm lint
+      - name: Unit tests
+        run: docker compose -f tests/docker/compose.yml run --rm unit
+      - name: Frontend tests
+        run: docker compose -f tests/docker/compose.yml run --rm frontend-js
+      - name: Deployment tests
+        run: docker compose -f tests/docker/compose.yml run --rm deploy
+      - name: WeeWX conformance
+        run: docker compose -f tests/docker/compose.yml run --rm conformance

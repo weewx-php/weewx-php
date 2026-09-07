@@ -68,6 +68,15 @@ def run(ctx: Context) -> None:
         if not condition:
             raise Failure(message)
 
+    def retry_request(path: str, fields: dict) -> tuple[int, str]:
+        # HTTP intake rejects SQLite contention immediately; senders replay unacknowledged data.
+        for attempt in range(10):
+            answer = request(path, fields)
+            if answer != (503, "unavailable"):
+                return answer
+            time.sleep(0.02 * (attempt + 1))
+        raise Failure("WU storage remained unavailable after retries")
+
     try:
         for _ in range(100):
             try:
@@ -82,14 +91,17 @@ def run(ctx: Context) -> None:
         wu = {"ID": "SHARED", "PASSWORD": keys["wunderground"], "tempf": "68", "dateutc": stamp, "action": "updateraw"}
         endpoint = "/weatherstation/updateweatherstation.php"
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-            answers = list(pool.map(lambda _: request(endpoint, wu), range(8)))
+            answers = list(pool.map(lambda _: retry_request(endpoint, wu), range(8)))
         require(all(answer == (200, "success") for answer in answers), "concurrent WU requests were not all accepted")
         senders = rows("SELECT id, received, state FROM ingest_sender")
         require(len(senders) == 1 and senders[0][1:] == (8, "pending"), "first-use assignment was not atomic")
         first = senders[0][0]
         next_password = rows("SELECT value FROM ingest_meta WHERE name='wunderground'")[0][0]
         require(next_password != keys["wunderground"], "WU password was not consumed")
-        require(not (work / "data/live.sdb").exists(), "pending requests wrote live.sdb")
+        # The CLI initializes native collector storage in live.sdb before any HTTP upload.
+        with contextlib.closing(sqlite3.connect(work / "data/live.sdb")) as live:
+            require(live.execute("SELECT COUNT(*) FROM packet").fetchone()[0] == 0,
+                    "pending requests stored weather packets")
         require(request(endpoint, {**wu, "PASSWORD": "wrong"})[0] == 403, "bad WU password accepted")
         require(request(endpoint, {"ID": "SHARED", "PASSWORD": next_password})[0] == 400, "metadata-only WU consumed password")
         require(rows("SELECT value FROM ingest_meta WHERE name='wunderground'")[0][0] == next_password, "invalid request rotated password")
@@ -131,14 +143,14 @@ def run(ctx: Context) -> None:
         # identity, free credentials, adoption or the existing live history.
         free_before = rows("SELECT value FROM ingest_meta WHERE name='wunderground'")[0][0]
         with concurrent.futures.ThreadPoolExecutor(max_workers=9) as pool:
-            uploads = [pool.submit(request, endpoint, wu) for _ in range(8)]
+            uploads = [pool.submit(retry_request, endpoint, wu) for _ in range(8)]
             replacement = pool.submit(cli, "rotate", first)
             new_password = replacement.result().strip().removeprefix("PASSWORD: ")
             require(all(task.result()[0] in (200, 403) for task in uploads), "rotation race lost storage availability")
         require(request(endpoint, wu)[0] == 403, "replaced password remained valid")
         wu["PASSWORD"] = new_password
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-            require(all(answer == (200, "success") for answer in pool.map(lambda _: request(endpoint, wu), range(8))),
+            require(all(answer == (200, "success") for answer in pool.map(lambda _: retry_request(endpoint, wu), range(8))),
                     "replacement password failed under concurrent uploads")
         require(rows("SELECT id, state FROM ingest_sender WHERE id=?", (first,)) == [(first, "adopted")], "replacement changed sender identity/adoption")
         require(rows("SELECT value FROM ingest_meta WHERE name='wunderground'")[0][0] == free_before, "replacement consumed free password")

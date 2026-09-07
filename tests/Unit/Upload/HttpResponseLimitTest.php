@@ -27,6 +27,49 @@ final class HttpResponseLimitTest extends TestCase
         $this->checkClient(new CurlClient());
     }
 
+    public function testClientsExposeRedirectHeadersWithoutFollowingThem(): void
+    {
+        $server = stream_socket_server('tcp://127.0.0.1:0');
+        self::assertIsResource($server);
+        $address = stream_socket_get_name($server, false);
+        self::assertIsString($address);
+        $clients = [new StreamClient()];
+        if (CurlClient::available()) {
+            $clients[] = new CurlClient();
+        }
+        $pid = pcntl_fork();
+        self::assertNotSame(-1, $pid);
+        if ($pid === 0) {
+            foreach ($clients as $_) {
+                $connection = stream_socket_accept($server, 3);
+                if ($connection === false) {
+                    exit(1);
+                }
+                stream_set_timeout($connection, 3);
+                while (($line = fgets($connection)) !== false && trim($line) !== '') {
+                }
+                fwrite($connection, "HTTP/1.1 302 Found\r\nLoCaTiOn: https://example.invalid/package\r\nContent-Length: 8\r\nConnection: close\r\n\r\nredirect");
+                fclose($connection);
+            }
+            fclose($server);
+            exit(0);
+        }
+        fclose($server);
+        try {
+            foreach ($clients as $client) {
+                $response = $client->send(new HttpRequest('GET', 'http://' . $address . '/', timeout: 2, maxResponseBytes: 32));
+                self::assertSame(302, $response->status);
+                self::assertSame('https://example.invalid/package', $response->headers['location'] ?? null);
+                self::assertSame('redirect', $response->body);
+            }
+        } finally {
+            pcntl_waitpid($pid, $status);
+        }
+        self::assertIsInt($status);
+        self::assertTrue(pcntl_wifexited($status));
+        self::assertSame(0, pcntl_wexitstatus($status));
+    }
+
     private function checkClient(HttpClient $client): void
     {
         $dir = TempDir::create('http-limit');

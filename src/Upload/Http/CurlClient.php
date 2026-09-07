@@ -28,6 +28,7 @@ final class CurlClient implements HttpClient
         foreach ($request->headers as $name => $value) {
             $headers[] = $name . ': ' . $value;
         }
+        $responseHeaders = [];
         $options = [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_CUSTOMREQUEST => $request->method === '' ? 'GET' : $request->method,
@@ -36,6 +37,15 @@ final class CurlClient implements HttpClient
             CURLOPT_FOLLOWLOCATION => false,
             CURLOPT_USERAGENT => Version::USER_AGENT,
             CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_HEADERFUNCTION => static function (\CurlHandle $handle, string $line) use (&$responseHeaders): int {
+                if (str_starts_with($line, 'HTTP/')) {
+                    $responseHeaders = [];
+                } elseif (str_contains($line, ':')) {
+                    [$name, $value] = explode(':', $line, 2);
+                    $responseHeaders[strtolower(trim($name))] = trim($value);
+                }
+                return strlen($line);
+            },
         ];
         if ($request->body !== null) {
             $options[CURLOPT_POSTFIELDS] = $request->body;
@@ -61,6 +71,6 @@ final class CurlClient implements HttpClient
             );
         }
         $status = curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
-        return new HttpResponse(is_int($status) ? $status : 0, $request->maxResponseBytes === null && is_string($body) ? $body : $boundedBody);
+        return new HttpResponse(is_int($status) ? $status : 0, $request->maxResponseBytes === null && is_string($body) ? $body : $boundedBody, $responseHeaders);
     }
 }

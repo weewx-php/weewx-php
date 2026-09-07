@@ -172,7 +172,7 @@ final class Page
             $body .= '<div class="notice error" role="alert">' . $this->t($error) . ($detail === '' ? '' : '<div>' . self::escape($this->language->text($detail)) . '</div>') . '</div>';
         } elseif (Input::text($query, 'saved') === '1') {
             $result = Input::text($query, 'result');
-            $body .= '<div class="notice success" role="status" tabindex="-1">' . $this->t(in_array($result, ['queued', 'installed', 'enabled', 'disabled', 'removed', 'refreshed'], true) ? 'feedback.' . $result : 'status.saved') . '</div>';
+            $body .= '<div class="notice success" role="status" tabindex="-1">' . $this->t(in_array($result, ['queued', 'installed', 'enabled', 'disabled', 'removed', 'refreshed', 'checked', 'updated'], true) ? 'feedback.' . $result : 'status.saved') . '</div>';
         }
         $body .= match ($page) {
             'overview' => $this->overview(),
@@ -849,7 +849,8 @@ final class Page
         $settings = $this->read->config->settings;
         $out = '<section class="panel"><h2>' . $this->t('label.general') . '</h2>' . $this->form('settings.save') . '<div class="form-grid">'
             . $this->timezone($settings->timezone->getName())
-            . $this->select('language', 'label.language', Translator::available(), $this->language->language);
+            . $this->select('language', 'label.language', Translator::available(), $this->language->language)
+            . $this->select('update_channel', 'core.channel', ['stable' => $this->language->text('core.stable'), 'beta' => $this->language->text('core.beta')], $this->read->file->root()->optionalSection('Admin')?->optional('update_channel')?->string() ?? 'stable');
         $out .= $this->select('backup_enabled', 'label.backup_enabled', ['true' => $this->language->text('label.yes'), 'false' => $this->language->text('label.no')], $settings->backupEnabled ? 'true' : 'false')
             . $this->input('backup_retention_days', 'label.backup_retention_days', (string) $settings->backupRetentionDays, 'number', true);
         $out .= $this->select('visit_tick_enabled', 'label.visit_tick_enabled', ['true' => $this->language->text('label.yes'), 'false' => $this->language->text('label.no')], $settings->visitTickEnabled ? 'true' : 'false', 'hint.visit_tick');
@@ -857,7 +858,7 @@ final class Page
             'time_budget' => $settings->timeBudget, 'max_intervals_per_run' => $settings->maxIntervalsPerRun] as $key => $value) {
             $out .= $this->input($key, 'label.' . $key, (string) $value, 'number');
         }
-        return $out . '</div>' . $this->endForm() . '</section>' . $this->uploads($query);
+        return $out . '</div>' . $this->endForm() . '</section>' . (new CoreUpdatePage($this->read, $this->language, $this->csrf))->render() . $this->uploads($query);
     }
 
     /** @param array<string, mixed> $query */

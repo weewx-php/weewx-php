@@ -445,7 +445,21 @@
         "suggestions.accept": "Alle Vorschläge übernehmen",
         "suggestions.confirm": "{count} Zuordnungen übernehmen und die bestehende Historie mit dieser Station fortführen? Alte Messwerte bleiben erhalten.",
         "suggestions.confirm_action": "Ja, Zuordnungen übernehmen",
-        "error.suggestion_confirmation": "Übernahme der Vorschläge bestätigen."
+        "error.suggestion_confirmation": "Übernahme der Vorschläge bestätigen.",
+        "core.title": "Core-Update",
+        "core.channel": "Core-Update-Kanal",
+        "core.stable": "Stabil",
+        "core.beta": "Beta",
+        "core.installed": "Installierte Version",
+        "core.available": "Verfügbare Version",
+        "core.check": "Nach Updates suchen",
+        "core.install": "Update installieren",
+        "core.no_release": "Kein freigegebenes Update-Paket verfügbar",
+        "core.current": "Aktuell",
+        "feedback.checked": "Update-Prüfung abgeschlossen.",
+        "feedback.updated": "Core aktualisiert.",
+        "error.core_changed": "Das Release hat sich geändert. Suche erneut nach Updates.",
+        "error.core_update": "Core-Update fehlgeschlagen. Prüfe das Serverprotokoll."
     },
     "name": "Deutsch",
   "status.rain_input": "Regenberechnung"

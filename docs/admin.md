@@ -165,6 +165,13 @@ recorded assignments provide evidence. Changing today's mapping never attributes
 undocumented old records to today's station. Rain gap evidence is stored
 separately from the standard archive columns.
 
+## Core updates
+
+**Settings → Core update** checks published GitHub releases and installs a
+selected update. The default channel is **Stable**; **Beta** is an explicit
+setting. See [Core updates](core-updates.md) for prerequisites, release tags
+and recovery.
+
 ## Languages
 
 English is the default. German is included. Select the admin language under

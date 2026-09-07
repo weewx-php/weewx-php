@@ -33,4 +33,6 @@ composer.phar
 
 # Local deployment settings and credentials.
 /.deploy/
+/.weewx-deploy/
+/dist/
 __pycache__/

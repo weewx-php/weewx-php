@@ -445,7 +445,21 @@
         "suggestions.accept": "Accept all suggestions",
         "suggestions.confirm": "Accept {count} assignments and continue the existing history with this station? Existing readings are preserved.",
         "suggestions.confirm_action": "Yes, accept assignments",
-        "error.suggestion_confirmation": "Confirm the suggested assignments."
+        "error.suggestion_confirmation": "Confirm the suggested assignments.",
+        "core.title": "Core update",
+        "core.channel": "Core update channel",
+        "core.stable": "Stable",
+        "core.beta": "Beta",
+        "core.installed": "Installed version",
+        "core.available": "Available version",
+        "core.check": "Check for updates",
+        "core.install": "Install update",
+        "core.no_release": "No released update package available",
+        "core.current": "Up to date",
+        "feedback.checked": "Update check complete.",
+        "feedback.updated": "Core updated.",
+        "error.core_changed": "The release has changed. Check for updates again.",
+        "error.core_update": "Core update failed. Check the server log."
     },
     "name": "English",
   "status.rain_input": "Rain calculation"
