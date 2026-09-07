@@ -7,7 +7,7 @@ namespace WeewxPhp;
 /** What this application calls itself to the services it posts to. */
 final class Version
 {
-    public const STRING = '0.2.0';
+    public const STRING = '0.2.1';
 
     /** What goes into an HTTP `User-Agent` and a CWOP login line. */
     public const NAME = 'weewx-php';
