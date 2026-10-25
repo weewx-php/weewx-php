@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Frontend;
@@ -7,6 +9,8 @@ namespace WeewxPhp\Frontend;
 /** The render-context tags belong to the theme, not to the weather database. */
 final class Theme
 {
+    /** @var array<string, array<string, string>> */
+    private static array $defaults = [];
     /**
      * @param array<string, string> $texts
      * @param array<string, string> $labels
@@ -56,7 +60,19 @@ final class Theme
 
     public function text(string $message, ?string $context = null): string
     {
-        return $this->texts[$context === null ? $message : $context . "\004" . $message] ?? $message;
+        $key = $context === null ? $message : $context . "\004" . $message;
+        $language = $this->language === 'de' ? 'de' : 'en';
+        if (!isset(self::$defaults[$language])) {
+            $json = file_get_contents(__DIR__ . '/locales/' . $language . '.json');
+            $texts = json_decode($json === false ? '{}' : $json, true, 8, JSON_THROW_ON_ERROR);
+            self::$defaults[$language] = [];
+            foreach (is_array($texts) ? $texts : [] as $name => $text) {
+                if (is_string($name) && is_string($text)) {
+                    self::$defaults[$language][$name] = $text;
+                }
+            }
+        }
+        return $this->texts[$key] ?? self::$defaults[$language][$key] ?? $message;
     }
 
     public function html(string $message, ?string $context = null): string
@@ -75,7 +91,7 @@ final class Theme
         $date = $at === null ? null : Span::date($at, new \DateTimeZone($timezone));
         return ['encoding' => 'utf-8', 'filename' => $this->filename, 'lang' => $this->language,
             'page' => $this->page, 'skin' => $this->name, 'SKIN_NAME' => $this->name, 'SKIN_VERSION' => $this->version,
-            'month_name' => $date?->format('F'), 'year_name' => $date?->format('Y'),
+            'month_name' => $date === null ? null : $this->text($date->format('F')), 'year_name' => $date?->format('Y'),
             'SummaryByDay' => $this->summaries['day'] ?? [], 'SummaryByMonth' => $this->summaries['month'] ?? [],
             'SummaryByYear' => $this->summaries['year'] ?? [], 'Extras' => $this->extras];
     }

@@ -266,7 +266,10 @@ final class Weather
     {
         Catalog::identifier($observation);
         [$unit, $group] = Units::unitOf($this->reader()->units, $observation, $this->archiveConfig->groups());
-        $target = $this->outputProfile->units[$observation] ?? $this->outputProfile->units[$group ?? ''] ?? $unit;
+        $target = $this->outputProfile->units[$observation] ?? null;
+        if ($target === null || $unit === null || !Units::canConvert($unit, $target)) {
+            $target = $this->outputProfile->units[$group ?? ''] ?? $unit;
+        }
         if ($target !== null) {
             (new Value(null, $unit, $group))->to($target);
         }

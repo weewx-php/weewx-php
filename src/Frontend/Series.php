@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Frontend;
@@ -27,6 +29,7 @@ final class Series implements IteratorAggregate, JsonSerializable
         public readonly string $observation = '',
         public readonly bool $delta = false,
         public readonly array $fallback = [],
+        public readonly string $timezone = 'UTC',
     ) {}
 
     public function to(string $unit): self
@@ -43,19 +46,19 @@ final class Series implements IteratorAggregate, JsonSerializable
             $point['value'] = (new Value($point['value'], $this->unit, $this->group))->to($unit)->raw;
             $fallback[] = $point;
         }
-        return new self($points, $unit, $this->group, $this->status, $this->asOf, $this->computedAt, $this->output, $this->observation, $this->delta, $fallback);
+        return new self($points, $unit, $this->group, $this->status, $this->asOf, $this->computedAt, $this->output, $this->observation, $this->delta, $fallback, $this->timezone);
     }
 
     public function withOutput(Output $output, string $observation = ''): self
     {
-        return new self($this->points, $this->unit, $this->group, $this->status, $this->asOf, $this->computedAt, $output, $observation, $this->delta, $this->fallback);
+        return new self($this->points, $this->unit, $this->group, $this->status, $this->asOf, $this->computedAt, $output, $observation, $this->delta, $this->fallback, $this->timezone);
     }
 
     /** @return list<array{start: int, end: int, value: string, coverage: float|null}> */
     public function formatted(): array
     {
         return array_map(fn(array $point): array => ['start' => $point['start'], 'end' => $point['end'],
-            'value' => (new Value($point['value'], $this->unit, $this->group, output: $this->output, observation: $this->observation, delta: $this->delta))->format(),
+            'value' => (new Value($point['value'], $this->unit, $this->group, timezone: $this->timezone, output: $this->output, observation: $this->observation, delta: $this->delta))->format(),
             'coverage' => $point['coverage']], $this->points);
     }
 
@@ -70,8 +73,10 @@ final class Series implements IteratorAggregate, JsonSerializable
             $this->asOf,
             $this->computedAt,
             $point['coverage'] ?? null,
+            timezone: $this->timezone,
             output: $this->output,
             observation: $this->observation,
+            delta: $this->delta,
         );
     }
 
@@ -111,7 +116,7 @@ final class Series implements IteratorAggregate, JsonSerializable
             $order = $ascending ? $a['value'] <=> $b['value'] : $b['value'] <=> $a['value'];
             return $order === 0 ? $a['start'] <=> $b['start'] : $order;
         });
-        return new self(array_slice($points, 0, $limit), $this->unit, $this->group, $this->status, $this->asOf, $this->computedAt, delta: $this->delta);
+        return new self(array_slice($points, 0, $limit), $this->unit, $this->group, $this->status, $this->asOf, $this->computedAt, $this->output, $this->observation, $this->delta, $this->fallback, $this->timezone);
     }
 
     /** Select a month across years from a series of complete calendar-month intervals. */
@@ -131,7 +136,7 @@ final class Series implements IteratorAggregate, JsonSerializable
                 $points[] = $point;
             }
         }
-        return new self($points, $this->unit, $this->group, $this->status, $this->asOf, $this->computedAt, delta: $this->delta);
+        return new self($points, $this->unit, $this->group, $this->status, $this->asOf, $this->computedAt, $this->output, $this->observation, $this->delta, $this->fallback, $this->timezone);
     }
 
     /** Calendar overlay keyed by month/day, never by position in an incomplete year.
@@ -176,7 +181,7 @@ final class Series implements IteratorAggregate, JsonSerializable
         $lower = (int) floor($index);
         $upper = (int) ceil($index);
         $value = $numbers === [] ? null : $numbers[$lower] + ($numbers[$upper] - $numbers[$lower]) * ($index - $lower);
-        return new Value($value, $this->unit, $this->group, $this->status, $this->asOf, $this->computedAt, delta: $this->delta);
+        return new Value($value, $this->unit, $this->group, $this->status, $this->asOf, $this->computedAt, timezone: $this->timezone, output: $this->output, observation: $this->observation, delta: $this->delta);
     }
 
     /**
@@ -199,9 +204,9 @@ final class Series implements IteratorAggregate, JsonSerializable
             }
         }
         $status = $this->status === 'pending' || $value->status === 'pending' ? 'pending' : ($this->status === 'stale' || $value->status === 'stale' ? 'stale' : 'ready');
-        $make = fn(?float $number, ?string $unit, ?string $group): Value => new Value($number, $unit, $group, $status, $this->asOf, $this->computedAt);
+        $make = fn(?float $number, ?string $unit, ?string $group): Value => new Value($number, $unit, $group, $status, $this->asOf, $this->computedAt, timezone: $this->timezone, output: $this->output, observation: $this->observation);
         return ['count' => count($numbers), 'mean' => $make($mean, $this->unit, $this->group),
-            'difference' => new Value($raw === null || $mean === null ? null : $raw - $mean, $this->unit, $this->group, $status, $this->asOf, $this->computedAt, delta: true),
+            'difference' => new Value($raw === null || $mean === null ? null : $raw - $mean, $this->unit, $this->group, $status, $this->asOf, $this->computedAt, timezone: $this->timezone, output: $this->output, observation: $this->observation, delta: true),
             'percentOfMean' => $make($raw === null || $mean === null || $mean === 0.0 ? null : $raw / $mean * 100, 'percent', 'group_percent'),
             'percentile' => $make($raw === null || $numbers === [] ? null : ($less + $equal / 2) / count($numbers) * 100, 'percent', 'group_percent')];
     }

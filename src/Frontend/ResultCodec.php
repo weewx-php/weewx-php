@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Frontend;
@@ -70,6 +72,7 @@ final class ResultCodec
                 $computedAt,
                 delta: ($data['delta'] ?? false) === true,
                 fallback: is_array($data['fallback'] ?? null) ? self::points($data['fallback']) : [],
+                timezone: $timezone,
             );
         }
         $value = self::raw($data['value'] ?? null);

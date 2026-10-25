@@ -485,7 +485,7 @@ final class Computation
                 }
                 unset($point);
             }
-            $series = new Series($points, $this->unit, $this->group, $status, $this->asOf, $computedAt, delta: in_array($this->spec->aggregate, ['diff', 'trend'], true), fallback: $this->fallback);
+            $series = new Series($points, $this->unit, $this->group, $status, $this->asOf, $computedAt, delta: in_array($this->spec->aggregate, ['diff', 'trend'], true), fallback: $this->fallback, timezone: $this->reader->config->timezone->getName());
             if ($this->spec->analysis !== '') {
                 $spec = clone $this->spec;
                 $spec->threshold = $this->threshold(false);

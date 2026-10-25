@@ -56,6 +56,23 @@ final class WeatherTest extends TestCase
         }
     }
 
+    public function testTimestampSeriesKeepsTheArchiveTimezoneThroughTheCache(): void
+    {
+        $series = $this->wx->on('2024-01')->series('outTemp', 'day', 'maxtime')->series();
+        self::assertInstanceOf(Series::class, $series);
+        self::assertSame('2024-01-02 00:00', $series->value(0)->format());
+        $cached = \WeewxPhp\Frontend\ResultCodec::decode(\WeewxPhp\Frontend\ResultCodec::encode($series), 'Europe/Berlin');
+        self::assertInstanceOf(Series::class, $cached);
+        self::assertSame('2024-01-02 00:00', $cached->formatted()[0]['value']);
+        $output = $this->wx->output(new \WeewxPhp\Frontend\Output(units: ['outTemp' => 'degree_F']));
+        try {
+            self::assertSame('unix_epoch', $output->on('2024-01-01')->aggregate('outTemp', 'maxtime')->value()->unit);
+            self::assertSame('count', $output->on('2024-01-01')->count('outTemp')->value()->unit);
+        } finally {
+            $output->close();
+        }
+    }
+
     private string $dir;
     private Config $config;
     private ArchiveDb $db;

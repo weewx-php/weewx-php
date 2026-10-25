@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Frontend;
@@ -49,7 +51,7 @@ final class Value implements JsonSerializable, Stringable
             return $missing ?? $this->output->missing ?? '—';
         }
         if (is_string($this->raw)) {
-            return $this->raw;
+            return $this->observation === 'moon_phase' ? (new Theme(language: $this->output->language ?? 'en'))->text($this->raw) : $this->raw;
         }
         if ($this->raw instanceof Vector) {
             return (new self($this->raw->magnitude(), $this->unit, $this->group, output: $this->output, observation: $this->observation))->format($format, $label, $missing)
