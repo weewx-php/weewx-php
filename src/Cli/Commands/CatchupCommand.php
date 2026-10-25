@@ -60,7 +60,7 @@ final class CatchupCommand implements Command
                 }
                 $archiver = Archiver::open($archive, $runtime->config->settings, $runtime->live(), $runtime->state(), $runtime->log, $now, $runtime->archiveChanges($archive));
                 try {
-                    $progress = $archiver->catchUp(null, null, Budget::unlimited($runtime->clock));
+                    $progress = $archiver->catchUp(null, null, Budget::unlimited($runtime->clock), now: $now);
                     $runtime->state()->noteCaughtUp($id, $now);
                     $runtime->state()->noteRun($id, $now, $progress->built, $archiver->archive()->lastTimestamp());
                     $console->line(sprintf('%s: %d record(s) written', $id, $progress->built));

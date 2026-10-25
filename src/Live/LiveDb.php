@@ -48,6 +48,8 @@ final class LiveDb
         );
         CREATE UNIQUE INDEX IF NOT EXISTS packet_identity ON packet(driver, identity, kind, dateTime, digest);
         CREATE INDEX IF NOT EXISTS packet_dateTime ON packet(dateTime);
+        CREATE INDEX IF NOT EXISTS packet_received ON packet(received) WHERE raw IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS packet_mapping ON packet(mapping) WHERE mapping IS NOT NULL;
         CREATE INDEX IF NOT EXISTS packet_station ON packet(driver, identity, dateTime);
         CREATE INDEX IF NOT EXISTS packet_sender ON packet(sender, dateTime);
         CREATE TABLE IF NOT EXISTS dialect_mapping (
@@ -66,6 +68,7 @@ final class LiveDb
             stop    INTEGER NOT NULL,
             seconds INTEGER NOT NULL,
             archive TEXT    NOT NULL DEFAULT 'default',
+            generation INTEGER NOT NULL DEFAULT 1,
             PRIMARY KEY (stop, archive)
         );
         CREATE TABLE IF NOT EXISTS live_metadata (
@@ -236,17 +239,25 @@ final class LiveDb
     {
         $stop = Intervals::stop($timestamp, $intervalSeconds);
         foreach ($archives as $archive) {
-            $this->db->exec('INSERT OR REPLACE INTO pending (stop, seconds, archive) VALUES (?, ?, ?)', [$stop, $intervalSeconds, $archive]);
+            $this->db->exec('INSERT INTO pending (stop, seconds, archive) VALUES (?, ?, ?) ON CONFLICT(stop, archive) DO UPDATE SET seconds = excluded.seconds, generation = generation + 1', [$stop, $intervalSeconds, $archive]);
         }
         return $stop;
     }
 
-    /** One archive is done with this interval. The others are not. */
-    public function clearPending(int $stop, string $archive): void
+    public function pendingGeneration(int $stop, string $archive): int
     {
-        $this->db->transaction(function () use ($stop, $archive): void {
-            $this->db->exec('DELETE FROM pending WHERE stop = ? AND archive = ?', [$stop, $archive]);
-            $this->replay()->release($archive, $stop);
+        $value = $this->db->scalar('SELECT generation FROM pending WHERE stop = ? AND archive = ?', [$stop, $archive]);
+        return $value === null ? 0 : (int) Sqlite::text($value);
+    }
+
+    /** One archive is done with this interval. The others are not. */
+    public function clearPending(int $stop, string $archive, ?int $generation = null): void
+    {
+        $this->db->transaction(function () use ($stop, $archive, $generation): void {
+            $removed = $this->db->exec('DELETE FROM pending WHERE stop = ? AND archive = ?' . ($generation === null ? '' : ' AND generation = ?'), $generation === null ? [$stop, $archive] : [$stop, $archive, $generation]);
+            if ($generation === null || $removed > 0) {
+                $this->replay()->release($archive, $stop);
+            }
         });
     }
 
@@ -256,13 +267,13 @@ final class LiveDb
      * @param int $grace Seconds an interval is held back after it ends, so a packet that is
      *     merely slow does not force a second computation.
      *
-     * @return list<array{stop: int, seconds: int}>
+     * @return list<array{stop: int, seconds: int, generation: int}>
      */
     public function due(int $now, int $grace, string $archive, int $minStop = 0): array
     {
         $due = [];
-        foreach ($this->db->query('SELECT stop, seconds FROM pending WHERE stop <= ? AND archive = ? AND stop >= ? ORDER BY stop', [$now - $grace, $archive, $minStop]) as $row) {
-            $due[] = ['stop' => (int) Sqlite::text($row['stop']), 'seconds' => (int) Sqlite::text($row['seconds'])];
+        foreach ($this->db->query('SELECT stop, seconds, generation FROM pending WHERE stop <= ? AND archive = ? AND stop >= ? ORDER BY stop', [$now - $grace, $archive, $minStop]) as $row) {
+            $due[] = ['stop' => (int) Sqlite::text($row['stop']), 'seconds' => (int) Sqlite::text($row['seconds']), 'generation' => (int) Sqlite::text($row['generation'])];
         }
         return $due;
     }
@@ -434,7 +445,10 @@ final class LiveDb
             // archive cursor survives time limits, restarts and receiver races.
             $before = $this->replay()->retentionCutoff($before);
             $dropped = $this->db->exec('DELETE FROM packet WHERE seq IN (SELECT seq FROM packet WHERE dateTime < ? ORDER BY dateTime LIMIT 1000)', [$before]);
-            $this->db->exec('DELETE FROM dialect_mapping WHERE digest NOT IN (SELECT mapping FROM packet WHERE mapping IS NOT NULL)');
+            if ($dropped > 0) {
+                $this->setMeta('retention_pruned', '1');
+            }
+            $this->db->exec('DELETE FROM dialect_mapping WHERE NOT EXISTS (SELECT 1 FROM packet WHERE packet.mapping = dialect_mapping.digest)');
             $this->db->exec('DELETE FROM pending WHERE stop < ?', [$before]);
             return $dropped;
         });

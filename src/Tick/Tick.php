@@ -186,7 +186,7 @@ final class Tick
             $caughtUp = $state->archive($config->id)->caughtUpAt;
             $walked = false;
             if ($caughtUp === null || $now - $caughtUp >= self::CATCH_UP_EVERY) {
-                $progress = $archiver->catchUp(null, null, $budget, $replace);
+                $progress = $archiver->catchUp(null, null, $budget, now: $now);
                 $written += $progress->built;
                 $walked = $progress->finished;
                 if ($progress->finished) {
@@ -240,14 +240,26 @@ final class Tick
         if ($now - $last < self::PRUNE_EVERY) {
             return;
         }
-        $forgotten = $live->forgetRaw($now - $settings->rawRetention);
+        $deadline = $this->runtime->clock->monotonic() + 1.0;
+        $forgotten = 0;
+        do {
+            $batch = $live->forgetRaw($now - $settings->rawRetention);
+            $forgotten += $batch;
+        } while ($batch === 1000 && $this->runtime->clock->monotonic() < $deadline);
+        $rawComplete = $batch < 1000;
         $live->replay()->retain(array_map('strval', array_keys($this->runtime->config->archives)));
         $live->collector()->prune($now);
-        $pruned = $live->prune($now - $settings->liveRetention);
+        $pruned = 0;
+        do {
+            $batch = $live->prune($now - $settings->liveRetention);
+            $pruned += $batch;
+        } while ($batch === 1000 && $this->runtime->clock->monotonic() < $deadline);
         if ($pruned > 0) {
             $live->vacuum();
         }
-        $live->setMeta(self::PRUNED_AT, (string) $now);
+        if ($batch < 1000 && $rawComplete) {
+            $live->setMeta(self::PRUNED_AT, (string) $now);
+        }
         if ($pruned > 0 || $forgotten > 0) {
             $this->runtime->log->debug(sprintf('journal: pruned %d packet(s), forgot %d raw upload(s)', $pruned, $forgotten));
         }

@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Tick;
@@ -45,6 +47,38 @@ final class TickTest extends TestCase
     protected function tearDown(): void
     {
         TempDir::remove($this->dir);
+    }
+
+    public function testRebuildPolicyCatchUpFinishesAcrossSmallBudgets(): void
+    {
+        $this->settings = Archives::settings($this->dir . '/data', latePackets: \WeewxPhp\Config\LatePackets::Rebuild, maxIntervalsPerRun: 1);
+        $runtime = $this->runtime([$this->kirchdorf()]);
+        for ($i = 0; $i < 4; ++$i) {
+            $this->add($runtime, self::T0 + $i * 300 + 10, ['outTemp' => 10.0]);
+        }
+        try {
+            for ($i = 0; $i < 6; ++$i) {
+                (new Tick($runtime))->run('test', archiveOnly: true);
+            }
+            self::assertNotNull($runtime->state()->archive('kirchdorf')->caughtUpAt);
+        } finally {
+            $runtime->close();
+        }
+    }
+
+    public function testMaintenanceDrainsMoreThanOnePruneBatch(): void
+    {
+        $this->settings = Archives::settings($this->dir . '/data', liveRetention: 3600);
+        $runtime = $this->runtime([]);
+        for ($i = 0; $i < 1001; ++$i) {
+            $this->add($runtime, self::T0 - 7200 + $i, ['outTemp' => 1.0]);
+        }
+        try {
+            (new Tick($runtime))->maintenance(\WeewxPhp\Archive\Budget::unlimited($this->clock));
+            self::assertSame(0, $runtime->live()->count());
+        } finally {
+            $runtime->close();
+        }
     }
 
     public function testRunsEveryArchiveJudgesTheStationsAndRecordsTheRun(): void

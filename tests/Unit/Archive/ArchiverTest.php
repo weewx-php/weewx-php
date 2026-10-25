@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Archive;
@@ -52,6 +54,76 @@ final class ArchiverTest extends TestCase
         $this->live->close();
         $this->state->close();
         TempDir::remove($this->dir);
+    }
+
+    public function testCatchUpWaitsForTheOpenIntervalAndArchiveDelay(): void
+    {
+        $this->add(self::T0 + 120, ['rain' => 0.7]);
+        $archiver = $this->archiver();
+        self::assertSame(0, $archiver->catchUp(null, null, Budget::unlimited($this->clock), now: self::T0 + 120)->built);
+        $this->add(self::T0 + 290, ['rain' => 1.8]);
+        self::assertSame(0, $archiver->catchUp(null, null, Budget::unlimited($this->clock), now: self::T0 + 314)->built);
+        self::assertSame(1, $archiver->catchUp(null, null, Budget::unlimited($this->clock), now: self::T0 + 315)->built);
+        self::assertEqualsWithDelta(2.5, $archiver->archive()->record(self::T0 + 300)['rain'] ?? null, 1e-12);
+        $archiver->close();
+    }
+
+    public function testReplacementDoesNotRebuildThePrunedRetentionEdge(): void
+    {
+        $this->add(self::T0 + 10, ['rain' => 0.5]);
+        $this->add(self::T0 + 200, ['rain' => 0.5]);
+        $archiver = $this->archiver();
+        $archiver->processDue(self::T0 + 1000, Budget::unlimited($this->clock));
+        self::assertSame(1, $this->live->prune(self::T0 + 100));
+        $this->add(self::T0 + 250, ['rain' => 0.0]);
+        self::assertSame(0, $archiver->processDue(self::T0 + 1000, Budget::unlimited($this->clock), true));
+        self::assertSame(1.0, $archiver->archive()->record(self::T0 + 300)['rain'] ?? null);
+        $archiver->close();
+    }
+
+    public function testReplayCompletionRetainsNewerRecordsInTheSameDay(): void
+    {
+        $this->add(self::T0 + 10, ['outTemp' => 10.0]);
+        $this->add(self::T0 + 400, ['outTemp' => 20.0]);
+        $archiver = $this->archiver();
+        $archiver->processDue(self::T0 + 1000, Budget::unlimited($this->clock));
+        $this->live->replay()->mark($archiver->config(), self::T0 + 10, self::T0 + 300, 300);
+        $archiver->processReplay(self::T0 + 1000, Budget::unlimited($this->clock));
+        $day = $archiver->archive()->loadDay(self::T0 - 39_000, UnitSystem::METRICWX);
+        self::assertSame(2, $day->get('outTemp')->statsTuple()[5]);
+        self::assertSame(2, $archiver->archive()->count());
+        $archiver->close();
+    }
+
+    public function testPartialRebuildKeepsOtherIntervalsLoopExtremesAndPacketTimes(): void
+    {
+        $this->add(self::T0 + 10, ['outTemp' => 10.0, 'windSpeed' => 1.0]);
+        $this->add(self::T0 + 100, ['outTemp' => 10.0, 'windSpeed' => 1.0]);
+        $this->add(self::T0 + 400, ['outTemp' => 20.0, 'windSpeed' => 2.0]);
+        $this->add(self::T0 + 500, ['outTemp' => 40.0, 'windSpeed' => 8.0]);
+        $archiver = $this->archiver();
+        $archiver->processDue(self::T0 + 1000, Budget::unlimited($this->clock));
+        $sod = self::T0 - 39_000;
+        $day = $archiver->archive()->loadDay($sod, UnitSystem::METRICWX);
+        self::assertSame(self::T0 + 10, $day->get('outTemp')->statsTuple()[1]);
+        self::assertSame(self::T0 + 500, $day->get('wind')->statsTuple()[3]);
+        $archiver->rebuild(self::T0, self::T0 + 300);
+        $day = $archiver->archive()->loadDay($sod, UnitSystem::METRICWX);
+        self::assertSame(40.0, $day->get('outTemp')->statsTuple()[2]);
+        self::assertSame(self::T0 + 10, $day->get('outTemp')->statsTuple()[1]);
+        $archiver->close();
+    }
+
+    public function testLateReplacementRemovesExtremesFromTheOldRecord(): void
+    {
+        $this->add(self::T0 + 10, ['windSpeed' => 10.0]);
+        $archiver = $this->archiver();
+        $archiver->processDue(self::T0 + 1000, Budget::unlimited($this->clock));
+        $this->add(self::T0 + 200, ['windSpeed' => 0.0]);
+        $archiver->processDue(self::T0 + 1000, Budget::unlimited($this->clock), true);
+        $day = $archiver->archive()->loadDay(self::T0 - 39_000, UnitSystem::METRICWX);
+        self::assertSame(5.0, $day->get('windSpeed')->statsTuple()[2]);
+        $archiver->close();
     }
 
     public function testBuildsARecordFromTheIntervalsPacketsAndSharpensTheDay(): void

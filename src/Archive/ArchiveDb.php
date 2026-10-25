@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Archive;
@@ -497,8 +499,8 @@ final class ArchiveDb implements History
      * double-count anything.
      *
      * @param array<string, mixed> $record
-     * @param bool $replace Whether an existing record is replaced. Its old contribution to the
-     *     daily sums is taken back out first; its extremes are not, see rebuildDay().
+     * @param bool $replace Whether to update supplied columns of an existing record and
+     *     recompute its daily summaries from archive records.
      * @param bool $updateDaily Whether to fold the record into its day. Off when a caller
      *     batches a day itself.
      *
@@ -519,21 +521,24 @@ final class ArchiveDb implements History
         }
         $names = implode(', ', array_map($this->quoted(...), array_keys($known)));
         $marks = implode(', ', array_fill(0, count($known), '?'));
-        $verb = $replace ? 'INSERT OR REPLACE' : 'INSERT OR IGNORE';
+        $verb = 'INSERT OR IGNORE';
         $sql = sprintf('%s INTO %s (%s) VALUES (%s)', $verb, $this->quoted($this->tableName), $names, $marks);
+        if ($replace) {
+            $updates = implode(', ', array_map(fn(string $column): string => $this->quoted($column) . ' = excluded.' . $this->quoted($column), array_keys($known)));
+            $sql = sprintf('INSERT INTO %s (%s) VALUES (%s) ON CONFLICT(dateTime) DO UPDATE SET %s', $this->quoted($this->tableName), $names, $marks, $updates);
+        }
 
         return $this->db->transaction(function () use ($record, $known, $replace, $updateDaily, $sql): bool {
-            if ($replace && $updateDaily) {
-                $old = $this->record(self::timestampOf($record));
-                if ($old !== null) {
-                    $this->unapplyDaily($old);
-                }
-            }
             if ($this->db->exec($sql, array_values(array_map(self::bindable(...), $known))) === 0) {
                 return false;
             }
             if ($updateDaily) {
-                $this->applyDaily($known);
+                if ($replace) {
+                    $this->rebuildDay(Intervals::startOfArchiveDay(self::timestampOf($record), $this->zone));
+                    $this->advanceLastUpdate(self::timestampOf($record));
+                } else {
+                    $this->applyDaily($known);
+                }
             }
             return true;
         });
@@ -780,7 +785,7 @@ final class ArchiveDb implements History
                 }
             }
             foreach ($this->records($day->start(), $day->stop()) as $record) {
-                $this->storeDay($startOfDay, $day, null);
+                $this->storeDay($startOfDay, $day, $this->lastRecordTimestamp($day));
                 break;
             }
         });
@@ -852,51 +857,6 @@ final class ArchiveDb implements History
     }
 
     /**
-     * Take one record's contribution back out, for a replacement. Only the
-     * sums come out: extremes cannot be reversed, a maximum does not
-     * remember the runner-up, so a day whose records changed needs
-     * rebuildDay() for its highs and lows.
-     *
-     * @param array<string, mixed> $record
-     */
-    private function unapplyDaily(array $record): void
-    {
-        try {
-            $weight = self::weightOf($record);
-        } catch (IntervalError) {
-            return;
-        }
-        $sod = Intervals::startOfArchiveDay(self::timestampOf($record), $this->zone);
-        $day = $this->loadDay($sod, self::unitSystemOf($record));
-        $negative = new Accum($sod, Intervals::endOfDay($sod, $this->zone), self::unitSystemOf($record), $this->policy);
-        $negative->addRecord($record, false, $weight);
-        foreach ($negative->types() as $obsType) {
-            if (!$day->has($obsType)) {
-                continue;
-            }
-            $mine = $day->get($obsType);
-            $theirs = $negative->get($obsType);
-            if ($mine instanceof ScalarStats && $theirs instanceof ScalarStats) {
-                $mine->sum -= $theirs->sum;
-                $mine->count -= $theirs->count;
-                $mine->wsum -= $theirs->wsum;
-                $mine->sumtime -= $theirs->sumtime;
-            } elseif ($mine instanceof VecStats && $theirs instanceof VecStats) {
-                $mine->sum -= $theirs->sum;
-                $mine->count -= $theirs->count;
-                $mine->wsum -= $theirs->wsum;
-                $mine->sumtime -= $theirs->sumtime;
-                $mine->xsum -= $theirs->xsum;
-                $mine->ysum -= $theirs->ysum;
-                $mine->dirsumtime -= $theirs->dirsumtime;
-                $mine->squaresum -= $theirs->squaresum;
-                $mine->wsquaresum -= $theirs->wsquaresum;
-            }
-        }
-        $this->storeDay($sod, $day, null);
-    }
-
-    /**
      * `lastUpdate` the way WeeWX keeps it: the time of the last record
      * folded into the summaries. Only ever moved forward, so a replayed or
      * replaced record cannot make WeeWX backfill what is already there.
@@ -929,7 +889,7 @@ final class ArchiveDb implements History
 
     public function getMeta(string $name): ?string
     {
-        if (!$this->schema->hasDaySummaries() && $this->schema->metadata === []) {
+        if ($this->schema->metadata === [] && !in_array($this->tableName . '_day__metadata', $this->db->tables(), true)) {
             return null;
         }
         $value = $this->db->scalar(sprintf('SELECT value FROM %s WHERE name = ?', $this->quoted($this->tableName . '_day__metadata')), [$name]);
@@ -939,6 +899,9 @@ final class ArchiveDb implements History
     /** Write one metadata row the way WeeWX does: delete, then insert. */
     public function setMeta(string $name, string $value): void
     {
+        if (!in_array($this->tableName . '_day__metadata', $this->db->tables(), true)) {
+            return;
+        }
         $table = $this->quoted($this->tableName . '_day__metadata');
         $this->db->transaction(function () use ($table, $name, $value): void {
             $this->db->exec(sprintf('DELETE FROM %s WHERE name = ?', $table), [$name]);

@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Weewx;
@@ -43,7 +45,7 @@ final class Intervals
     {
         $local = (new DateTimeImmutable('@' . $timestamp))->setTimezone($zone);
         $midnight = $local->setTime(0, 0, 0);
-        if ($midnight->getTimestamp() === $timestamp) {
+        if ($local->format('H:i:s') === '00:00:00') {
             $midnight = $midnight->modify('-1 day');
         }
         return $midnight->getTimestamp();
@@ -68,6 +70,6 @@ final class Intervals
      */
     public static function endOfDay(int $startOfDay, DateTimeZone $zone): int
     {
-        return (new DateTimeImmutable('@' . $startOfDay))->setTimezone($zone)->modify('+1 day')->getTimestamp();
+        return (new DateTimeImmutable('@' . $startOfDay))->setTimezone($zone)->modify('+1 day')->setTime(0, 0, 0)->getTimestamp();
     }
 }

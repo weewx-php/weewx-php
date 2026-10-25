@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Archive;
@@ -34,6 +36,33 @@ final class ArchiveDbTest extends TestCase
     protected function tearDown(): void
     {
         TempDir::remove($this->dir);
+    }
+
+    public function testReplacementPreservesColumnsNotSuppliedByTheRebuild(): void
+    {
+        $archive = $this->open('extra.sdb', create: true);
+        $archive->addColumn('imported', ColumnType::Real);
+        $archive->addRecord(['dateTime' => 1788609600, 'usUnits' => 17, 'interval' => 5, 'outTemp' => 10.0, 'imported' => 42.0]);
+        $archive->addRecord(['dateTime' => 1788609600, 'usUnits' => 17, 'interval' => 5, 'outTemp' => 20.0], true);
+        self::assertSame(42.0, $archive->record(1788609600)['imported'] ?? null);
+        $archive->close();
+    }
+
+    public function testArchiveWithoutDailyTablesRemainsWritable(): void
+    {
+        $archive = $this->open('no-daily.sdb', create: true);
+        $archive->close();
+        $raw = Sqlite::open($this->dir . '/no-daily.sdb', false, JournalMode::Wal);
+        foreach ($raw->tables() as $table) {
+            if (str_starts_with($table, 'archive_day_')) {
+                $raw->exec('DROP TABLE "' . $table . '"');
+            }
+        }
+        $raw->close();
+        $archive = $this->open('no-daily.sdb', create: false);
+        self::assertTrue($archive->addRecord(['dateTime' => 1788609600, 'usUnits' => 17, 'interval' => 5, 'outTemp' => 10.0]));
+        self::assertSame(1, $archive->count());
+        $archive->close();
     }
 
     public function testCreatesTheTablesWeewxCreatesWithTheSameWords(): void
