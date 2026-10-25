@@ -80,6 +80,43 @@ final class ReceiverTest extends TestCase
         self::assertSame(200, $this->receiver->handle('GET', self::WU, $this->wu($password), static fn(): string => '', '192.0.2.21', true)->status);
     }
 
+    public function testMappedIpv4AliasesShareOnlyTheirOwnPeerAllowance(): void
+    {
+        $store = $this->runtime->ingest();
+        $config = new IngestConfig(requestsPerMinute: 2);
+        self::assertTrue($store->permitPeer('192.0.2.1', self::NOW, $config));
+        self::assertTrue($store->permitPeer('::ffff:192.0.2.1', self::NOW, $config));
+        self::assertFalse($store->permitPeer('::ffff:c000:201', self::NOW, $config));
+        self::assertTrue($store->permitPeer('::ffff:c000:202', self::NOW, $config));
+        self::assertTrue($store->permitPeer('::ffff:192.0.2.2', self::NOW, $config));
+        self::assertFalse($store->permitPeer('192.0.2.2', self::NOW, $config));
+        self::assertTrue($store->permitPeer('2001:db8:1::1', self::NOW, $config));
+        self::assertTrue($store->permitPeer('2001:db8:1::2', self::NOW, $config));
+        self::assertFalse($store->permitPeer('2001:db8:1::3', self::NOW, $config));
+    }
+
+    public function testAdoptedSenderFromFreshIpEvictsExpiredThenLeastRecentPeer(): void
+    {
+        $password = $this->keys['wunderground'];
+        $this->get($this->wu($password));
+        [$sender] = $this->runtime->ingest()->senders();
+        $this->runtime->ingest()->adopt($sender->id, null, self::NOW);
+        $db = Sqlite::open($this->runtime->config->settings->ingestDbPath(), false, $this->runtime->config->settings->journalMode);
+        try {
+            $db->exec('DELETE FROM ingest_limit');
+            $db->exec("WITH RECURSIVE peers(n) AS (SELECT 0 UNION ALL SELECT n + 1 FROM peers WHERE n < 4095) INSERT INTO ingest_limit (peer, window, requests, failed_window, touched) SELECT printf('198.18.%d.%d', n / 256, n % 256), ? - (n = 0), 1, ?, ? - (n = 1) FROM peers", [intdiv(self::NOW, 60), intdiv(self::NOW, 300), self::NOW]);
+            $send = fn(string $peer): Response => $this->receiver->handle('GET', self::WU, $this->wu($password), static fn(): string => '', $peer, true);
+            self::assertSame(200, $send('203.0.113.1')->status);
+            self::assertNull($db->scalar("SELECT peer FROM ingest_limit WHERE peer = '198.18.0.0'"));
+            self::assertNotNull($db->scalar("SELECT peer FROM ingest_limit WHERE peer = '198.18.0.1'"));
+            self::assertSame(200, $send('203.0.113.2')->status);
+            self::assertNull($db->scalar("SELECT peer FROM ingest_limit WHERE peer = '198.18.0.1'"));
+            self::assertSame(4096, $db->scalar("SELECT COUNT(*) FROM ingest_limit WHERE peer NOT LIKE 'sender:%'"));
+        } finally {
+            $db->close();
+        }
+    }
+
     public function testExhaustedIpDoesNotReadWundergroundPostBodies(): void
     {
         $this->runtime->config = new Config($this->runtime->config->settings, [], [], [], ingest: new IngestConfig(enabled: true, requestsPerMinute: 1));

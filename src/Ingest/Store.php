@@ -339,8 +339,13 @@ final class Store
         if ($row === null) {
             // Authenticated sender rows have a separate, inherently bounded
             // namespace, so an IP-table flood cannot consume their slots.
-            if (!$sender && (int) Sqlite::text($this->db->scalar("SELECT COUNT(*) FROM ingest_limit WHERE peer NOT LIKE 'sender:%'")) >= 4096) {
-                return false;
+            if (!$sender) {
+                $count = (int) Sqlite::text($this->db->scalar("SELECT COUNT(*) FROM ingest_limit WHERE peer NOT LIKE 'sender:%'"));
+                if ($count >= 4096) {
+                    // Keep sender quotas and the global counter intact. Expired
+                    // peer windows leave first, then the least recently seen peers.
+                    $this->db->exec("DELETE FROM ingest_limit WHERE peer IN (SELECT peer FROM ingest_limit WHERE peer NOT LIKE 'sender:%' AND peer != '*' ORDER BY CASE WHEN window < ? AND blocked_until <= ? THEN 0 ELSE 1 END, touched, peer LIMIT ?)", [intdiv($now, 60), $now, $count - 4095]);
+                }
             }
             $this->db->exec(
                 'INSERT INTO ingest_limit (peer, window, requests, failed_window, touched) VALUES (?, ?, 0, ?, ?)',
@@ -373,7 +378,13 @@ final class Store
     private static function peerBucket(string $peer): string
     {
         $packed = str_contains($peer, ':') && !str_starts_with($peer, 'sender:') ? inet_pton($peer) : false;
-        return $packed !== false && strlen($packed) === 16 ? bin2hex(substr($packed, 0, 8)) . '/64' : $peer;
+        if ($packed === false || strlen($packed) !== 16) {
+            return $peer;
+        }
+        if (bin2hex(substr($packed, 0, 12)) === '00000000000000000000ffff') {
+            return sprintf('%d.%d.%d.%d', ord($packed[12]), ord($packed[13]), ord($packed[14]), ord($packed[15]));
+        }
+        return bin2hex(substr($packed, 0, 8)) . '/64';
     }
 
     public function permitNative(string $collector, int $now, IngestConfig $config): bool
