@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {pairs, cumulative, dailyRain, temperatureHumidity, hardwareIntervals, rainAccumulation} from '../public/assets/chart-recipes.js';
@@ -16,7 +18,7 @@ test('cumulative rain stops at the first missing or incompletely measured interv
 });
 test('daily labels refer to interval start in station timezone across DST', () => {
     const points = [{start: Date.parse('2026-03-28T23:00:00Z') / 1000, end: Date.parse('2026-03-29T22:00:00Z') / 1000, value: 0}];
-    const option = dailyRain({points}, 'Europe/Berlin');
+    const option = dailyRain({points}, 'Europe/Berlin', {locale: 'de-DE'});
     assert.deepEqual(option.xAxis.data, ['29.03.']);
     assert.deepEqual(option.series[0].data, [0]);
     assert.equal(temperatureHumidity({}, 'Europe/Berlin').series[0].connectNulls, false);
@@ -36,4 +38,12 @@ test('coarse logger data retains both boundaries and never fills cumulative minu
         value: index => option.data[0][index], coord: value => value, visual: () => '#000',
     });
     assert.equal(rendered.children[0].shape.x2, 300000);
+});
+
+test('chart units come from the feed and labels default to English', () => {
+    const option = temperatureHumidity({temperature24h: {unitLabel: '°F'}, humidity24h: {unitLabel: '%'}}, 'UTC');
+    assert.equal(option.yAxis[0].name, '°F');
+    assert.equal(option.series[0].name, 'Temperature');
+    assert.equal(dailyRain({unitLabel: 'in'}, 'UTC').yAxis.name, 'in');
+    assert.equal(dailyRain({}, 'UTC', {locale: 'de', labels: {rain: 'Regen'}}).series[0].name, 'Regen');
 });
