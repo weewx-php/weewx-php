@@ -28,5 +28,6 @@
   "updated": "Core aktualisiert. Geänderte Dateien: {detail}",
   "tls_error": "TLS-Verbindung fehlgeschlagen. Servername und Zertifikat prüfen.",
   "cancelled": "Deployment abgebrochen.",
-  "error": "Deployment fehlgeschlagen. Konfiguration, Verbindung und Dateirechte prüfen."
+  "error": "Deployment fehlgeschlagen. Konfiguration, Verbindung und Dateirechte prüfen.",
+  "pending_update": "Ein unterbrochenes Core-Update muss vor dem Deployment wiederhergestellt werden."
 }

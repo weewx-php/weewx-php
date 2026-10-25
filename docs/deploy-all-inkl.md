@@ -95,6 +95,12 @@ that cannot tolerate mixed versions. Afterward check the public page, admin and
 scheduled processing. If PHP OPcache has timestamp validation disabled, arrange
 its reset through the hosting controls; this script does not reset OPcache.
 
+The FTPS script refuses deployment while `.weewx-deploy/pending.json` exists.
+This file belongs to an interrupted PHP core update. Let a normal application
+request recover it before retrying FTPS. If recovery fails, restore the PHP
+transaction using its saved manifest and backups before clearing pending state.
+Do not remove `pending.json` merely to bypass this check.
+
 ## Failed updates and recovery
 
 A staging failure leaves the existing live files unchanged. It can leave empty

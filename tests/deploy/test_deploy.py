@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
 """Deployment checks against a local TLS-only FTP server, inside Docker."""
 
 import contextlib
@@ -85,6 +86,15 @@ class DeploymentTest(unittest.TestCase):
 
     def emit(self, key, detail=""):
         self.events.append((key, detail))
+
+    def test_pending_php_update_blocks_publication(self):
+        self.put(".weewx-deploy/pending.json", b"{}")
+        remote = self.remote()
+        with self.assertRaises(deploy.DeployError) as failure:
+            deploy.deploy(remote, {"public/index.php": b"new"}, self.emit)
+        self.assertEqual("pending_update", failure.exception.key)
+        self.assertEqual(b"old page", (self.app / "public/index.php").read_bytes())
+        self.assertFalse((self.app / ".weewx-deploy/lock").exists())
 
     def test_update_preserves_installation_and_verifies_backups(self):
         protected = {
@@ -200,6 +210,18 @@ class DeploymentTest(unittest.TestCase):
 
 
 class LocalTest(unittest.TestCase):
+    def test_list_requests_hidden_files(self):
+        class HiddenFiles:
+            def mlsd(self, directory, facts):
+                return [(".htaccess", {"type": "file"})]
+
+            def retrlines(self, command, callback):
+                if command.startswith("LIST -a "):
+                    callback("-rw-r--r-- 1 user group 19 Oct 25 10:00 .htaccess")
+
+        remote = deploy.Remote(HiddenFiles())
+        self.assertEqual("file", remote.kind(".weewx-deploy/.htaccess"))
+
     def test_real_payload_only_contains_core(self):
         files = deploy.payload(ROOT)
         self.assertIn("themes/basic/theme.php", files)

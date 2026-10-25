@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
 """Update an existing core installation over explicit FTPS (Python 3.10+)."""
 
 import argparse
@@ -124,7 +125,11 @@ class Remote:
         if directory not in self.cache:
             facts = dict(self.ftp.mlsd(directory, facts=["type"]))
             lines = []
-            self.ftp.retrlines(f"LIST {directory}", lines.append)
+            try:
+                self.ftp.retrlines(f"LIST -a {directory}", lines.append)
+            except ftplib.error_perm:
+                lines.clear()
+                self.ftp.retrlines(f"LIST {directory}", lines.append)
             unix = {}
             for line in lines:
                 if line.startswith("total "):
@@ -214,6 +219,9 @@ def deploy(remote, files, emit):
     originals = {}
     keep_lock = False
     try:
+        remote.cache.clear()
+        if remote.kind(f"{STATE}/pending.json") is not None:
+            raise DeployError("pending_update")
         remote.write(f"{STATE}/.htaccess", b"Require all denied\n")
         changed = {}
         total = 0
