@@ -18,6 +18,7 @@ use WeewxPhp\State\StateDb;
 use WeewxPhp\Weewx\Accum;
 use WeewxPhp\Weewx\AccumError;
 use WeewxPhp\Weewx\Intervals;
+use WeewxPhp\Weewx\Merger;
 use WeewxPhp\Weewx\Policy;
 use WeewxPhp\Weewx\ScalarStats;
 use WeewxPhp\Weewx\SchemaError;
@@ -474,13 +475,28 @@ final class Archiver
         $sod = Intervals::startOfArchiveDay($built->stop, $this->config->timezone);
         $day = $this->archive->loadDay($sod, $built->accumulator->unitSystem());
         try {
-            $day->mergeHilo($built->accumulator);
+            $this->mergeLoopHilo($day, $built->accumulator);
         } catch (AccumError $error) {
             // An interval that straddles midnight: WeeWX refuses it too.
             $this->log->warning(sprintf('%s: the interval ending %d does not sharpen its day: %s', $this->config->id, $built->stop, $error->getMessage()));
             return;
         }
         $this->archive->storeDay($sod, $day, null);
+    }
+
+    private function mergeLoopHilo(Accum $day, Accum $loop): void
+    {
+        // A retained fragment cannot reproduce an interval mean. Avg-policy
+        // extrema come from archive records; packet min/max and vector gusts survive.
+        $hilo = new Accum($loop->start(), $loop->stop(), $loop->unitSystem(), $this->policy);
+        foreach ($loop->types() as $type) {
+            if ($this->policy->of($type)->merger === Merger::Avg) {
+                continue;
+            }
+            $hilo->setStats($type);
+            $hilo->get($type)->mergeHilo($loop->get($type));
+        }
+        $day->mergeHilo($hilo);
     }
 
     /**
@@ -583,7 +599,7 @@ final class Archiver
                 if ((is_int($interval) || is_float($interval)) && $interval > 0) {
                     if ($this->settings->loopHilo && $built !== null && $built->packets > 0
                         && $built->accumulator->start() >= $sod && $built->accumulator->stop() <= $eod) {
-                        $day->mergeHilo($built->accumulator);
+                        $this->mergeLoopHilo($day, $built->accumulator);
                     }
                     $day->addRecord($record, true, 60 * $interval);
                 }
@@ -710,7 +726,7 @@ final class Archiver
         }
         if ($this->settings->loopHilo && $built->packets > 0
             && $built->accumulator->start() >= $sod && $built->accumulator->stop() <= $eod) {
-            $after->mergeHilo($built->accumulator);
+            $this->mergeLoopHilo($after, $built->accumulator);
         }
         try {
             $after->addRecord($new, true, ArchiveDb::weightOf($new));
@@ -802,7 +818,7 @@ final class Archiver
             if ($this->settings->loopHilo && $stop - $seconds >= $sod && $stop <= $eod) {
                 $built = $this->build($stop, $seconds);
                 if ($built !== null && $built->packets > 0) {
-                    $day->mergeHilo($built->accumulator);
+                    $this->mergeLoopHilo($day, $built->accumulator);
                 }
             }
             if (isset($records[$stop])) {

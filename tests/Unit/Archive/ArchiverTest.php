@@ -246,6 +246,31 @@ final class ArchiverTest extends TestCase
         }
     }
 
+    public function testPrunedLoopMeanCannotSharpenArchivedSustainedWind(): void
+    {
+        $archiver = $this->archiver();
+        $this->add(self::T0 + 10, ['windSpeed' => 20.0, 'windDir' => 90.0]);
+        $this->add(self::T0 + 100, ['windSpeed' => 40.0, 'windDir' => 90.0]);
+        $this->add(self::T0 + 2410, ['windSpeed' => 10.0, 'windDir' => 180.0]);
+        $this->add(self::T0 + 2700, ['windSpeed' => 60.0], kind: PacketKind::Archive, interval: 5);
+        try {
+            $archiver->processDue(self::T0 + 3600, Budget::unlimited($this->clock));
+            self::assertSame(30.0, $archiver->archive()->record(self::T0 + 300)['windSpeed'] ?? null);
+            self::assertSame(1, $this->live->prune(self::T0 + 50));
+            $this->add(self::T0 + 2700, ['windSpeed' => 25.0], kind: PacketKind::Archive, interval: 5);
+            self::assertSame(1, $archiver->processDue(self::T0 + 3600, Budget::unlimited($this->clock), true));
+            self::assertSame(25.0, $archiver->archive()->record(self::T0 + 2700)['windSpeed'] ?? null);
+            $day = $archiver->archive()->loadDay(self::T0 - 39_000, UnitSystem::METRICWX);
+            self::assertSame(30.0, $day->get('windSpeed')->statsTuple()[2]);
+            self::assertSame(25.0, $day->get('windSpeed')->statsTuple()[0]);
+            self::assertSame(40.0, $day->get('wind')->statsTuple()[2]);
+            self::assertSame(90.0, $day->get('wind')->statsTuple()[8]);
+            self::assertSame(self::T0 + 300, $day->get('windSpeed')->statsTuple()[3]);
+        } finally {
+            $archiver->close();
+        }
+    }
+
     public function testLateReplacementRemovesExtremesFromTheOldRecord(): void
     {
         $this->add(self::T0 + 10, ['windSpeed' => 10.0]);
