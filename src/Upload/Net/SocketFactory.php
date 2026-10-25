@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Upload\Net;
@@ -13,7 +15,7 @@ interface SocketFactory
      * @param bool $tls Whether to wrap the connection in TLS.
      * @param bool $verify Whether the far end's certificate has to check out; off for a broker
      *     on the local network with a self-signed one.
-     * @param int $timeout Seconds to connect, and for each read afterwards.
+     * @param int $timeout Seconds for the connection, including opening, reads and writes.
      *
      * @throws Rejected When no connection could be made: permanent for a name that does not resolve.
      */

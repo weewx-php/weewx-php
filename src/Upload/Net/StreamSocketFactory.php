@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Upload\Net;
@@ -14,6 +16,7 @@ final class StreamSocketFactory implements SocketFactory
 {
     public function open(string $host, int $port, bool $tls, bool $verify, int $timeout): Connection
     {
+        $deadline = (hrtime(true) / 1_000_000_000) + $timeout;
         $address = sprintf('%s://%s:%d', $tls ? 'tls' : 'tcp', $host, $port);
         $context = stream_context_create($tls ? ['ssl' => [
             'verify_peer' => $verify,
@@ -31,10 +34,10 @@ final class StreamSocketFactory implements SocketFactory
             }
             throw new Rejected(
                 sprintf('could not reach %s:%d: %s', $host, $port, $reason),
-                permanent: str_contains($reason, 'getaddrinfo') || str_contains($reason, 'Name or service not known'),
+                permanent: Dns::missing($reason),
             );
         }
         stream_set_timeout($stream, $timeout);
-        return new StreamConnection($stream, sprintf('%s:%d', $host, $port));
+        return new StreamConnection($stream, sprintf('%s:%d', $host, $port), $deadline);
     }
 }

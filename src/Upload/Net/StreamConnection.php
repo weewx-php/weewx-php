@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Upload\Net;
@@ -13,7 +15,7 @@ final class StreamConnection implements Connection
     private $stream;
 
     /** @param resource $stream */
-    public function __construct($stream, private readonly string $peer)
+    public function __construct($stream, private readonly string $peer, private readonly ?float $deadline = null)
     {
         $this->stream = $stream;
     }
@@ -27,6 +29,7 @@ final class StreamConnection implements Connection
         $total = strlen($bytes);
         $sent = 0;
         while ($sent < $total) {
+            $this->timeout($stream);
             $written = @fwrite($stream, substr($bytes, $sent));
             if ($written === false || $written === 0) {
                 $this->close();
@@ -44,6 +47,7 @@ final class StreamConnection implements Connection
         }
         $chunks = '';
         while (strlen($chunks) < $length) {
+            $this->timeout($stream);
             $chunk = @fread($stream, max(1, $length - strlen($chunks)));
             if ($chunk === false || $chunk === '') {
                 $this->close();
@@ -60,6 +64,7 @@ final class StreamConnection implements Connection
         if ($stream === null) {
             return '';
         }
+        $this->timeout($stream);
         $chunk = @fread($stream, max(1, $max));
         return $chunk === false ? '' : $chunk;
     }
@@ -71,5 +76,20 @@ final class StreamConnection implements Connection
         if ($stream !== null) {
             @fclose($stream);
         }
+    }
+
+    /** @param resource $stream */
+    private function timeout($stream): void
+    {
+        if ($this->deadline === null) {
+            return;
+        }
+        $left = $this->deadline - (hrtime(true) / 1_000_000_000);
+        if ($left <= 0) {
+            $this->close();
+            throw new Rejected(sprintf('%s: connection deadline reached', $this->peer));
+        }
+        $seconds = (int) floor($left);
+        stream_set_timeout($stream, $seconds, max(1, (int) (($left - $seconds) * 1_000_000)));
     }
 }

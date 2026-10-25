@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Upload;
@@ -17,6 +19,28 @@ use WeewxPhp\Upload\Rejected;
 
 final class BudgetedTransportsTest extends TestCase
 {
+    public function testSocketReadsShareOneDeadline(): void
+    {
+        $streams = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+        self::assertIsArray($streams);
+        stream_set_timeout($streams[0], 0, 120000);
+        $connection = new \WeewxPhp\Upload\Net\StreamConnection($streams[0], 'test', (hrtime(true) / 1_000_000_000) + 0.12);
+        $start = (hrtime(true) / 1_000_000_000);
+        try {
+            self::assertSame('', $connection->readSome(1));
+            try {
+                $connection->read(1);
+                self::fail('The second read must not get a new timeout');
+            } catch (Rejected $error) {
+                self::assertStringContainsString('connection', $error->getMessage());
+            }
+            self::assertLessThan(0.2, (hrtime(true) / 1_000_000_000) - $start);
+        } finally {
+            $connection->close();
+            fclose($streams[1]);
+        }
+    }
+
     public function testARequestWaitsNoLongerThanTheTickHasLeft(): void
     {
         $clock = new FixedClock(1_000);

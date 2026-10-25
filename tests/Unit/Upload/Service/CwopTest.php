@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Upload\Service;
@@ -55,6 +57,7 @@ final class CwopTest extends TestCase
 
     public function testPositionsAreDegreesAndDecimalMinutes(): void
     {
+        self::assertSame('4900.00N', Cwop::latlon(48.999999, ['N', 'S'], true));
         self::assertSame('4827.58N', Cwop::latlon(48.4596, ['N', 'S'], true));
         self::assertSame('01139.23E', Cwop::latlon(11.6539, ['E', 'W'], false));
         self::assertSame('2218.00S', Cwop::latlon(-22.3, ['N', 'S'], true));

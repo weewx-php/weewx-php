@@ -1,9 +1,12 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Upload\Http;
 
+use WeewxPhp\Upload\Net\Dns;
 use WeewxPhp\Upload\Rejected;
 use WeewxPhp\Version;
 
@@ -67,7 +70,7 @@ final class CurlClient implements HttpClient
             $code = curl_errno($handle);
             throw new Rejected(
                 sprintf('%s: %s', $request->masked(), $error === '' ? 'no answer' : $error),
-                permanent: $code === CURLE_COULDNT_RESOLVE_HOST,
+                permanent: $code === CURLE_COULDNT_RESOLVE_HOST && Dns::missing($error),
             );
         }
         $status = curl_getinfo($handle, CURLINFO_RESPONSE_CODE);

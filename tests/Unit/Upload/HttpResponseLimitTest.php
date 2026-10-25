@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Upload;
@@ -14,6 +16,21 @@ use WeewxPhp\Upload\Rejected;
 
 final class HttpResponseLimitTest extends TestCase
 {
+    public function testStreamErrorsAndWindyPathsHideCredentials(): void
+    {
+        $request = new HttpRequest('GET', 'file:///tmp/missing-upload-file?PASSWORD=private-password&key=private-key');
+        try {
+            (new StreamClient())->send($request);
+            self::fail('The missing file must fail');
+        } catch (Rejected $error) {
+            self::assertStringNotContainsString('private-password', $error->getMessage());
+            self::assertStringNotContainsString('private-key', $error->getMessage());
+        }
+        self::assertSame('https://stations.windy.com/pws/update/***', (new HttpRequest('POST', 'https://stations.windy.com/pws/update/private-key'))->masked());
+        self::assertFalse(\WeewxPhp\Upload\Net\Dns::missing('php_network_getaddresses: getaddrinfo: Temporary failure in name resolution'));
+        self::assertTrue(\WeewxPhp\Upload\Net\Dns::missing('php_network_getaddresses: getaddrinfo: Name or service not known'));
+    }
+
     public function testStreamResponsesRespectTheLimitAndUnboundedRequestsStillWork(): void
     {
         $this->checkClient(new StreamClient());
