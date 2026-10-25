@@ -439,15 +439,15 @@ final class Archiver
         $this->changes?->before($from, $built->stop);
         try {
             $written = $this->archive->transaction(function () use ($built, $replace, $updateDaily): bool {
-                $existing = $this->archive->exists($built->stop);
-                if ($existing && !$replace) {
+                $old = $this->archive->record($built->stop);
+                if ($old !== null && !$replace) {
                     return false;
                 }
                 if (!$updateDaily) {
                     $this->archive->addRecord($built->record, $replace, false);
-                } elseif ($existing) {
+                } elseif ($old !== null) {
                     $this->archive->addRecord($built->record, true, false);
-                    $this->repairDay(Intervals::startOfArchiveDay($built->stop, $this->config->timezone));
+                    $this->replaceIntervalDay($built, $old, $built->record + $old);
                 } else {
                     if ($this->settings->loopHilo && $built->packets > 0) {
                         $this->sharpenDay($built);
@@ -692,74 +692,124 @@ final class Archiver
         return $first !== null && $stop - $seconds - self::RUN_UP > $first;
     }
 
+    /** @param array<string, mixed> $old
+     * @param array<string, mixed> $new
+     */
+    private function replaceIntervalDay(Built $built, array $old, array $new): void
+    {
+        $sod = Intervals::startOfArchiveDay($built->stop, $this->config->timezone);
+        $eod = Intervals::endOfDay($sod, $this->config->timezone);
+        $units = $this->archive->unitSystem();
+        $day = $this->archive->loadDay($sod, $units);
+        $before = new Accum($sod, $eod, $units, $this->policy);
+        $after = new Accum($sod, $eod, $units, $this->policy);
+        try {
+            $before->addRecord($old, false, ArchiveDb::weightOf($old));
+        } catch (IntervalError) {
+            // An invalid interval never contributed to the daily sums.
+        }
+        if ($this->settings->loopHilo && $built->packets > 0
+            && $built->accumulator->start() >= $sod && $built->accumulator->stop() <= $eod) {
+            $after->mergeHilo($built->accumulator);
+        }
+        try {
+            $after->addRecord($new, true, ArchiveDb::weightOf($new));
+        } catch (IntervalError) {
+            // WeeWX still keeps the archive record without folding its sums.
+        }
+        $rebuilt = null;
+        foreach ($day->types() as $type) {
+            $stats = $day->get($type);
+            if (!$stats instanceof ScalarStats && !$stats instanceof VecStats) {
+                continue;
+            }
+            $previous = $before->has($type) ? $before->get($type)->statsTuple() : [];
+            $replacement = $after->has($type) ? $after->get($type) : null;
+            $next = $replacement?->statsTuple() ?? [];
+            $tuple = $stats->statsTuple();
+            // Direction at offset 8 belongs to the gust maximum. Only the
+            // shared scalar sums and trailing vector sums are additive.
+            $sums = $stats instanceof VecStats ? [4, 5, 6, 7, 9, 10, 11, 12, 13] : [4, 5, 6, 7];
+            foreach ($sums as $index) {
+                $tuple[$index] = ($tuple[$index] ?? 0) - ($previous[$index] ?? 0) + ($next[$index] ?? 0);
+            }
+            $stats->setStats($tuple);
+            foreach (['min' => 'mintime', 'max' => 'maxtime'] as $field => $timeField) {
+                $value = $replacement instanceof ScalarStats || $replacement instanceof VecStats ? $replacement->$field : null;
+                $stored = $stats->$field;
+                $timestamp = $stats->$timeField;
+                if ($value !== null && ($stored === null || ($field === 'min' ? $value <= $stored : $value >= $stored))) {
+                    $source = $replacement;
+                } elseif ($timestamp !== null && $built->stop - $built->seconds < $timestamp && $timestamp <= $built->stop) {
+                    // Only an extreme owned by this interval needs a full day scan.
+                    // Pruned runner-up LOOP evidence can legitimately come back duller.
+                    $rebuilt ??= $this->dayFromJournal($sod);
+                    $source = $rebuilt->has($type) ? $rebuilt->get($type) : null;
+                } else {
+                    continue;
+                }
+                $stats->$field = $source instanceof ScalarStats || $source instanceof VecStats ? $source->$field : null;
+                $stats->$timeField = $source instanceof ScalarStats || $source instanceof VecStats ? $source->$timeField : null;
+                if ($field === 'max' && $stats instanceof VecStats) {
+                    $stats->maxDir = $source instanceof VecStats ? $source->maxDir : null;
+                }
+            }
+        }
+        $this->archive->storeDay($sod, $day, $built->stop);
+    }
+
     private function repairDay(int $sod): void
     {
+        $this->archive->replaceDay($sod, $this->dayFromJournal($sod));
+    }
+
+    private function dayFromJournal(int $sod): Accum
+    {
         $eod = Intervals::endOfDay($sod, $this->config->timezone);
-        $previous = $this->archive->loadDay($sod, $this->archive->unitSystem());
         $day = new Accum($sod, $eod, $this->archive->unitSystem(), $this->policy);
-        $covered = [];
+        $records = [];
+        $intervals = [];
         foreach ($this->archive->records($sod, $eod) as $record) {
             $interval = $record['interval'] ?? null;
-            if ((!is_int($interval) && !is_float($interval)) || $interval <= 0) {
-                continue;
-            }
             $stop = $record['dateTime'];
-            if (!is_int($stop)) {
+            if (!is_int($stop) || (!is_int($interval) && !is_float($interval)) || $interval <= 0) {
                 continue;
             }
-            $seconds = (int) round($interval * 60);
-            if ($this->settings->loopHilo && $stop - $seconds >= $sod && $this->journalCovers($stop, $seconds)) {
+            $records[$stop] = $record;
+            $intervals[$stop] = (int) round($interval * 60);
+        }
+        if ($this->settings->loopHilo) {
+            foreach ($this->live->packets($sod, $eod, PacketKind::Loop, $this->config->senders) as $packet) {
+                $seconds = $this->config->interval($this->settings);
+                $start = max($sod, Intervals::start($packet->dateTime, $seconds));
+                $stop = min($eod, Intervals::stop($packet->dateTime, $seconds));
+                foreach ($intervals as $end => $span) {
+                    if ($end - $span < $packet->dateTime && $packet->dateTime <= $end) {
+                        continue 2;
+                    }
+                    // Fill journal-only gaps without changing an existing record's grid.
+                    if ($end < $packet->dateTime) {
+                        $start = max($start, $end);
+                    } elseif ($end - $span >= $packet->dateTime) {
+                        $stop = min($stop, $end - $span);
+                    }
+                }
+                $intervals[$stop] = $stop - $start;
+            }
+        }
+        ksort($intervals);
+        foreach ($intervals as $stop => $seconds) {
+            if ($this->settings->loopHilo && $stop - $seconds >= $sod && $stop <= $eod) {
                 $built = $this->build($stop, $seconds);
                 if ($built !== null && $built->packets > 0) {
                     $day->mergeHilo($built->accumulator);
-                    $covered[] = $built->accumulator;
                 }
             }
-            $day->addRecord($record, true, $interval * 60);
-        }
-        $this->preservePrunedExtremes($day, $previous, $covered);
-        $this->archive->replaceDay($sod, $day);
-    }
-
-    /** @param list<Accum> $covered Intervals whose LOOP extremes were reconstructed. */
-    private function preservePrunedExtremes(Accum $day, Accum $previous, array $covered): void
-    {
-        // Archive averages cannot reproduce LOOP extremes. Retain their values
-        // and packet times when the source interval could not be reconstructed.
-        foreach ($previous->types() as $type) {
-            $old = $previous->get($type);
-            if (!$old instanceof ScalarStats && !$old instanceof VecStats) {
-                continue;
-            }
-            foreach (['min' => 'mintime', 'max' => 'maxtime'] as $field => $timeField) {
-                $value = $old->$field;
-                $timestamp = $old->$timeField;
-                if ($value === null || $timestamp === null) {
-                    continue;
-                }
-                foreach ($covered as $interval) {
-                    if ($interval->includes($timestamp)) {
-                        continue 2;
-                    }
-                }
-                if (!$day->has($type)) {
-                    $day->setStats($type);
-                }
-                $stats = $day->get($type);
-                if (!$stats instanceof ScalarStats && !$stats instanceof VecStats) {
-                    continue;
-                }
-                $current = $stats->$field;
-                if ($current !== null && ($field === 'min' ? $current < $value : $current > $value)) {
-                    continue;
-                }
-                $stats->$field = $value;
-                $stats->$timeField = $timestamp;
-                if ($field === 'max' && $stats instanceof VecStats && $old instanceof VecStats) {
-                    $stats->maxDir = $old->maxDir;
-                }
+            if (isset($records[$stop])) {
+                $day->addRecord($records[$stop], true, ArchiveDb::weightOf($records[$stop]));
             }
         }
+        return $day;
     }
 
     /**
@@ -767,8 +817,8 @@ final class Archiver
      * there, day by day: the day's records first, then its summaries from
      * the archive table, then the LOOP extremes on top. Extremes cannot be
      * subtracted, a maximum does not remember the runner-up, so a day is
-     * corrected from its records and retained LOOP input. Extremes whose input
-     * was pruned are preserved. Returns how many records were written.
+     * corrected from its records and retained LOOP input. Pruned LOOP extremes
+     * can come back duller. Returns how many records were written.
      */
     public function rebuild(int $start, int $stop): int
     {
