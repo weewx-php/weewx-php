@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Upload;
@@ -25,10 +27,10 @@ final class Stamp
         return gmdate('Ymd', $timestamp);
     }
 
-    /** `21:43`, Weathercloud's `time`. */
+    /** `2143`, Weathercloud's `time`. */
     public static function minute(int $timestamp): string
     {
-        return gmdate('H:i', $timestamp);
+        return gmdate('Hi', $timestamp);
     }
 
     /** `/191843z`, the APRS day-hour-minute, zulu. */

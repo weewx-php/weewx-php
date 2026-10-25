@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Upload;
@@ -154,6 +156,9 @@ final class Uploads
             $posted = $upload->post($records);
             $budget->spent();
         } catch (Rejected $error) {
+            if ($error->posted?->through !== null) {
+                $this->state->advanceUpload($id, $now, $error->posted->sent, $error->posted->through);
+            }
             if ($error->permanent) {
                 $this->state->blockUpload($id, $now, $error->getMessage());
                 if ($known->blocked === null || $forced) {
@@ -190,7 +195,8 @@ final class Uploads
             $this->state->noteUploadFailure($id, $now, $summary);
             $this->log->warning(sprintf('upload %s: %s', $id, $summary));
         }
-        return ['sent' => $posted->sent, 'skipped' => $posted->skipped, 'failed' => count($posted->failures), 'summary' => $summary];
+        return ['sent' => $posted->sent, 'skipped' => $posted->skipped, 'failed' => count($posted->failures), 'summary' => $summary]
+            + ($posted->failures === [] ? [] : ['error' => $summary]);
     }
 
     /**
@@ -219,10 +225,9 @@ final class Uploads
         }
         $records = new Records($archiver->archive(), $zone);
         if ($config->kind->backfill() && $config->catchUp > 0) {
-            // Never reach further back than the horizon, whatever the limit
-            // says: the limit caps the requests, the horizon caps the age of
-            // what gets posted as though it mattered.
-            $after = $known->through > 0 ? max($known->through, $now - Records::HORIZON) : 0;
+            $horizon = $config->kind->horizon();
+            $after = !$forced && $horizon !== null && $known->through > 0
+                ? max($known->through, $now - $horizon) : $known->through;
             return $records->after($after, $config->catchUp);
         }
         // No backfill: the newest, and only if it is still current and new.

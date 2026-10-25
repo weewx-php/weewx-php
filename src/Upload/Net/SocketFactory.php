@@ -17,7 +17,7 @@ interface SocketFactory
      *     on the local network with a self-signed one.
      * @param int $timeout Seconds for the connection, including opening, reads and writes.
      *
-     * @throws Rejected When no connection could be made: permanent for a name that does not resolve.
+     * @throws Rejected When no connection could be made. Explicitly unknown hosts are permanent.
      */
     public function open(string $host, int $port, bool $tls, bool $verify, int $timeout): Connection;
 }

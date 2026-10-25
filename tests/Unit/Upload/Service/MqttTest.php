@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Upload\Service;
@@ -18,6 +20,19 @@ use WeewxPhp\Upload\UploadError;
 
 final class MqttTest extends TestCase
 {
+    public function testDiscoverySeparatesDirectionsAndBatteryFlagsFromMeasurements(): void
+    {
+        self::assertNull(HomeAssistant::deviceClass('windGustDir'));
+        self::assertNull(HomeAssistant::deviceClass('outTempBatteryStatus'));
+        self::assertNull(HomeAssistant::deviceClass('rainBatteryStatus'));
+        self::assertSame('temperature', HomeAssistant::deviceClass('extraTemp12'));
+        foreach (['hourRain', 'rain24', 'ET'] as $obs) {
+            $payload = json_decode(HomeAssistant::discovery($obs, 'mm', 'weather', $obs, 'Station')[1], true);
+            self::assertIsArray($payload);
+            self::assertSame('measurement', $payload['state_class']);
+        }
+    }
+
     private const CONNACK_OK = "\x20\x02\x00\x00";
 
     public function testTheWireFormatIsTheSpecifications(): void

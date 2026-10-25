@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Upload;
@@ -21,7 +23,7 @@ final class HomeAssistant
     /**
      * What Home Assistant calls the kind of thing a reading is; it picks an
      * icon, a graph and the conversions it offers from this, so a wrong one
-     * is not cosmetic. Matched longest first: `windGust` before `wind`.
+     * is not cosmetic. Numbered sensors share the class of their base name.
      */
     private const DEVICE_CLASS = [
         ['barometer', 'atmospheric_pressure'],
@@ -85,7 +87,7 @@ final class HomeAssistant
     ];
 
     /** Readings that are a running total rather than a measurement; graphed and summed differently. */
-    private const TOTAL = ['dayRain', 'rain24', 'hourRain', 'rainTotal', 'dayET', 'ET'];
+    private const TOTAL = ['dayRain', 'rainTotal', 'dayET'];
 
     private function __construct() {}
 
@@ -152,7 +154,7 @@ final class HomeAssistant
     public static function deviceClass(string $obs): ?string
     {
         foreach (self::DEVICE_CLASS as [$prefix, $class]) {
-            if (str_starts_with($obs, $prefix)) {
+            if ($obs === $prefix || (str_starts_with($obs, $prefix) && ctype_digit(substr($obs, strlen($prefix))))) {
                 return $class;
             }
         }
