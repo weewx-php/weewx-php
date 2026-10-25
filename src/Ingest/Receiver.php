@@ -39,10 +39,8 @@ final class Receiver
         $store = $this->runtime->ingest();
         $now = $this->runtime->clock->now();
         $sender = null;
+        $limited = false;
         try {
-            if (!$store->permit($peer, $now, $config)) {
-                throw new Rejected('request rate limited', 429);
-            }
             [$protocol, $key] = $this->route($path);
             if (!in_array($method, $protocol === Protocol::Ecowitt ? ['POST'] : ['GET', 'POST'], true)) {
                 throw new Rejected('method not allowed', 405);
@@ -67,6 +65,10 @@ final class Receiver
             // Parse together so duplicate credentials across query and body are rejected.
             $fields = Parser::form($query . ($query !== '' && $body !== '' ? '&' : '') . $body);
             $sender = $store->authenticate($protocol, $fields['PASSKEY'] ?? '', $fields['PASSWORD'] ?? '');
+            $limited = true;
+            if ($sender === null && !$store->permit($peer, $now, $config)) {
+                throw new Rejected('request rate limited', 429);
+            }
             if (!$store->permitSender($sender, $peer, $now, $config)) {
                 throw new Rejected($sender === null ? 'discovery blocked' : 'sender rate limited', 429);
             }
@@ -95,6 +97,9 @@ final class Receiver
             );
             return $protocol->reply();
         } catch (Rejected $error) {
+            if (!$limited && !$store->permit($peer, $now, $config)) {
+                $error = new Rejected('request rate limited', 429);
+            }
             if ($error->status < 500 && $error->status !== 429) {
                 if ($store->blocked($sender === null ? $peer : 'sender:' . $sender->id, $now)) {
                     $error = new Rejected($sender === null ? 'discovery blocked' : 'sender rate limited', 429);

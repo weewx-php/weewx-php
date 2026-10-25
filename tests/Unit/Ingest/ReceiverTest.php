@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Ingest;
@@ -50,6 +52,46 @@ final class ReceiverTest extends TestCase
     {
         $this->runtime->close();
         TempDir::remove($this->dir);
+    }
+
+    public function testRejectedIpRequestsDoNotConsumeTheGlobalDiscoveryAllowance(): void
+    {
+        $store = $this->runtime->ingest();
+        $config = new IngestConfig(requestsPerMinute: 2);
+        for ($i = 0; $i < 25; ++$i) {
+            $store->permit('192.0.2.10', self::NOW, $config);
+        }
+        self::assertTrue($store->permit('192.0.2.11', self::NOW, $config));
+        self::assertTrue($store->permit('2001:db8:1::1', self::NOW, $config));
+        self::assertTrue($store->permit('2001:db8:1::2', self::NOW, $config));
+        self::assertFalse($store->permit('2001:db8:1::3', self::NOW, $config));
+    }
+
+    public function testKnownSenderSurvivesExhaustedGlobalDiscoveryQuota(): void
+    {
+        $password = $this->keys['wunderground'];
+        $this->get($this->wu($password));
+        $config = new IngestConfig(enabled: true, requestsPerMinute: 1);
+        $this->runtime->config = new Config($this->runtime->config->settings, [], [], [], ingest: $config);
+        for ($i = 1; $i <= 10; ++$i) {
+            $this->runtime->ingest()->permit('192.0.2.' . $i, self::NOW, $config);
+        }
+        self::assertFalse($this->runtime->ingest()->permit('192.0.2.20', self::NOW, $config));
+        self::assertSame(200, $this->get($this->wu($password))->status);
+    }
+
+    public function testBookkeepingFailureAfterLiveCommitStillAcknowledgesDelivery(): void
+    {
+        $password = $this->keys['wunderground'];
+        $this->get($this->wu($password));
+        [$sender] = $this->runtime->ingest()->senders();
+        $this->runtime->ingest()->adopt($sender->id, null, self::NOW);
+        $db = Sqlite::open($this->runtime->config->settings->ingestDbPath(), false, $this->runtime->config->settings->journalMode);
+        $db->exec("CREATE TRIGGER fail_diagnostics BEFORE UPDATE ON ingest_diagnostic BEGIN SELECT RAISE(ABORT, 'bookkeeping failure'); END");
+        self::assertSame(200, $this->get($this->wu($password))->status);
+        self::assertTrue($this->receiver->wrote());
+        self::assertSame(1, $this->runtime->live()->count());
+        $db->close();
     }
 
     public function testEcowittDiscoveryDoesNotWriteLiveUntilAdoption(): void
@@ -330,7 +372,7 @@ final class ReceiverTest extends TestCase
         self::assertSame(200, $this->get($this->wu($password))->status);
     }
 
-    public function testSenderLimitsAreSharedAcrossWorkersAndStillRespectOuterLimits(): void
+    public function testSenderLimitsAreSharedAcrossWorkersAndIndependentOfDiscovery(): void
     {
         $password = $this->keys['wunderground'];
         $this->get($this->wu($password));
@@ -354,8 +396,8 @@ final class ReceiverTest extends TestCase
             self::assertSame(429, $send($password)->status);
             self::assertSame(200, $send($otherPassword)->status);
             self::assertSame(429, $send($otherPassword)->status);
-            // The seventh request is blocked by the IP limit before authentication.
-            self::assertSame('request rate limited', $send($otherPassword)->body);
+            // Known credentials keep their sender allowance when discovery is busy.
+            self::assertSame('sender rate limited', $send($otherPassword)->body);
             $this->clock->advance(60);
             self::assertSame(200, $send($password)->status);
         } finally {

@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Ingest;
@@ -81,6 +83,46 @@ final class NativeReceiverTest extends TestCase
             $checked[] = Json::object(json_encode($row, JSON_THROW_ON_ERROR));
         }
         return $checked;
+    }
+
+    public function testPendingDiscoveryExpiresAndDoesNotConsumeProvisionedSlots(): void
+    {
+        $store = $this->store();
+        $db = \WeewxPhp\Db\Sqlite::open($this->runtime->config->settings->liveDbPath(), false, $this->runtime->config->settings->journalMode);
+        for ($i = 0; $i < 100; ++$i) {
+            $db->exec('INSERT INTO weewx_collector (id, name, token_hash, created) VALUES (?, ?, ?, ?)', [(string) $i, 'pending', hash('sha256', (string) $i), self::NOW - 86401]);
+        }
+        self::assertNotEmpty($store->create('Local', self::NOW)['id']);
+        $store->prune(self::NOW);
+        self::assertCount(2, $store->collectors());
+        $store->delete($this->credentials['id']);
+        self::assertCount(1, $store->collectors());
+        $db->close();
+    }
+
+    public function testStationCapacityRejectsOnlyTheNewEvent(): void
+    {
+        $this->send($this->body([$this->packet()]));
+        $this->store()->adopt($this->credentials['id'], self::STATION);
+        $this->runtime->config = new Config($this->runtime->config->settings, [], [], [], ingest: new IngestConfig(enabled: true, maxPending: 1));
+        $second = '33333333-3333-4333-8333-333333333333';
+        $third = '44444444-4444-4444-8444-444444444444';
+        $results = $this->results($this->send($this->body([$this->packet(2, $second), $this->packet(3, $third), $this->packet(4)])));
+        self::assertSame(['pending', 'rejected', 'stored'], array_column($results, 'status'));
+        self::assertSame('station_capacity', $results[1]['reason']);
+        self::assertSame(1, $this->runtime->live()->count());
+    }
+
+    public function testTransportRejectionsAreFailureLimitedBeforeReadingTheBody(): void
+    {
+        for ($i = 0; $i < 30; ++$i) {
+            $response = $this->receiver->handle('GET', '', static function (): string {
+                self::fail('rejected request must not read the body');
+            }, '192.0.2.20', false, '', '');
+            self::assertSame(403, $response->status);
+        }
+        $response = $this->receiver->handle('GET', '', static fn(): string => '', '192.0.2.20', false, '', '');
+        self::assertSame(429, $response->status);
     }
 
     public function testAdmissionRetryAndIndependentSameDriverStations(): void

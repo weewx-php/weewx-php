@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Ingest;
@@ -59,7 +61,8 @@ final class Http
             );
             header('Content-Length: ' . strlen($response->body));
             $response->send();
-            if ($receiver->wrote() && $runtime->config->ingest->tickMode === 'auto') {
+            if ($receiver->wrote() && $runtime->config->ingest->tickMode === 'auto'
+                && $runtime->ingest()->claimTick($runtime->clock->now())) {
                 // Queue only. No calculations, archive writes or network uploads in this request.
                 (new Dispatcher($runtime))->request();
             }

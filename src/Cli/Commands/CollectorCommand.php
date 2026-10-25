@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Cli\Commands;
@@ -18,7 +20,7 @@ final class CollectorCommand implements Command
 
     public function usage(): string
     {
-        return 'collector add <name> | list | stations <collector> | adopt <collector> <station> [<name>] | block <collector> <station> | rotate|disable|enable <collector>';
+        return 'collector add <name> | list | stations <collector> | adopt <collector> <station> [<name>] | block <collector> <station> | rotate|disable|enable|delete <collector>';
     }
 
     public function summary(): string
@@ -31,7 +33,7 @@ final class CollectorCommand implements Command
         $action = array_shift($args);
         $valid = match ($action) {
             'list' => $args === [],
-            'add', 'stations', 'rotate', 'disable', 'enable' => count($args) === 1,
+            'add', 'stations', 'rotate', 'disable', 'enable', 'delete' => count($args) === 1,
             'block' => count($args) === 2,
             'adopt' => count($args) === 2 || count($args) === 3,
             default => false,
@@ -75,6 +77,8 @@ final class CollectorCommand implements Command
             $store->adopt($args[0], $args[1], $args[2] ?? null);
         } elseif ($action === 'block') {
             $store->block($args[0], $args[1]);
+        } elseif ($action === 'delete') {
+            $store->delete($args[0]);
         } elseif ($action === 'rotate') {
             $console->line('token: ' . $store->rotate($args[0]));
         } else {

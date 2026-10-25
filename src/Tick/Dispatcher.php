@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tick;
@@ -71,6 +73,18 @@ final class Dispatcher
         }
         if ($php === null) {
             return false;
+        }
+        $lock = Lock::tryAcquire($this->directory() . '/worker-errors.lock');
+        if ($lock !== null) {
+            try {
+                $errors = $this->directory() . '/worker-errors.log';
+                clearstatcache(true, $errors);
+                if (is_file($errors) && filesize($errors) > 1048576) {
+                    rename($errors, $errors . '.1');
+                }
+            } finally {
+                $lock->release();
+            }
         }
         // Only fixed executable/script paths and server-side configuration are passed.
         // All standard streams are detached; the shell exits without waiting for PHP.
