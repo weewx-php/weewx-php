@@ -287,7 +287,9 @@ final class Service
             throw new Problem('error.input');
         }
         foreach ($assignments as $station => $rows) {
-            if (!is_string($station) || !$archive->selects($station) || !is_array($rows) || count($rows) > 256) {
+            // PHP turns a numeric station ID in mapping[2024][...] into an int key.
+            $station = (string) $station;
+            if (!$archive->selects($station) || !is_array($rows) || count($rows) > 256) {
                 throw new Problem('error.station');
             }
             $mapping = [];

@@ -31,7 +31,10 @@ final class ConfFileTest extends TestCase
         $dir = TempDir::create('numeric-config');
         try {
             $read->root()->set('data_dir', $dir . '/data');
-            $read->root()->section('Archives')->section('2025')->addSection('fields')->addSection('2024')->set('outTemp', 'outTemp');
+            $archive = $read->root()->section('Archives')->section('2025');
+            $archive->set('senders', '2024');
+            $archive->set('explicit_mapping', 'true');
+            $archive->addSection('fields')->addSection('2024')->set('outTemp', 'outTemp');
             mkdir($dir . '/data');
             mkdir($dir . '/data/archives');
             $path = $dir . '/weather.conf';
@@ -41,6 +44,12 @@ final class ConfFileTest extends TestCase
             self::assertStringContainsString('[[2024]]', $snapshot);
             (new \WeewxPhp\Admin\Service($path, 1788609600))->execute('settings.save', ['revision' => $model->revision, 'backup_retention_days' => '7']);
             self::assertSame(7, \WeewxPhp\Config\Config::load($path)->settings->backupRetentionDays);
+            // The Fields page posts mapping[2024][...], which PHP decodes with an int key.
+            $model = new \WeewxPhp\Admin\ReadModel($path);
+            (new \WeewxPhp\Admin\Service($path, 1788609600))->execute('mapping.save_all', ['revision' => $model->revision, 'archive' => '2025', 'mapping' => ['2024' => ['outTemp' => 'outTemp']]]);
+            $saved = \WeewxPhp\Config\Config::load($path)->archive('2025');
+            self::assertNotNull($saved);
+            self::assertSame(['2024' => ['outTemp' => 'outTemp']], $saved->fields);
             $runtime = \WeewxPhp\Tick\Runtime::boot($path, new \WeewxPhp\Time\FixedClock(1788609600), new \WeewxPhp\Log\MemoryLogger());
             try {
                 $outcome = (new \WeewxPhp\Tick\Tick($runtime))->run('test');
