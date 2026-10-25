@@ -12,7 +12,7 @@ final class RainCounter
 {
     public const FIELDS = ['totalRain', 'yearRain', 'monthRain', 'weekRain', 'dayRain', 'eventRain'];
 
-    /** @var array<string, array<string, array{value: float, time: int}>> */
+    /** @var array<string, array<string, array{value: float, time: int, resolution: float}>> */
     private array $previous = [];
     /** @var array<string, int> Last accounted observation, including direct interval rain. */
     private array $through = [];
@@ -20,13 +20,15 @@ final class RainCounter
     public function __construct(private readonly DateTimeZone $timezone) {}
 
     /** @param array<string, mixed> $counters Values already converted and quality checked.
+     * @param array<string, float> $resolutions Encoded counter steps in the same units as the values.
      * @return array{start: int, stop: int, amount: float|null, status: string, counter: string}
      */
-    public function read(string $sender, int $time, array $counters, bool $hardware): array
+    public function read(string $sender, int $time, array $counters, bool $hardware, array $resolutions = []): array
     {
         $through = $this->through[$sender] ?? null;
         $result = ['start' => $through ?? $time, 'stop' => $time, 'amount' => null, 'status' => 'baseline', 'counter' => ''];
         $candidates = [];
+        $tolerances = [];
         $old = $this->previous[$sender] ?? [];
         $valid = false;
         foreach ($counters as $field => $value) {
@@ -34,13 +36,15 @@ final class RainCounter
                 continue;
             }
             $before = $this->previous[$sender][$field] ?? null;
+            $resolution = $resolutions[$field] ?? 0.0;
             $valid = true;
-            $this->previous[$sender][$field] = ['value' => (float) $value, 'time' => $time];
+            $this->previous[$sender][$field] = ['value' => (float) $value, 'time' => $time, 'resolution' => $resolution];
             // A returning counter cannot include an amount already booked through another source.
             if ($before === null || ($through !== null && $before['time'] !== $through)) {
                 continue;
             }
             $delta = (float) $value - $before['value'];
+            $tolerances[$field] = max($resolution, $before['resolution']);
             $period = match ($field) {
                 'yearRain' => 'Y', 'monthRain' => 'Y-m', 'weekRain' => 'o-W', 'dayRain' => 'Y-m-d',
                 'totalRain' => isset($counters['yearRain'], $old['yearRain'])
@@ -67,10 +71,13 @@ final class RainCounter
         if ($hardware) {
             return $result;
         }
-        foreach ($candidates as $candidate) {
+        foreach ($candidates as $field => $candidate) {
             if ($candidate['amount'] !== null) {
-                foreach ($candidates as $other) {
-                    if ($other['amount'] !== null && abs($candidate['amount'] - $other['amount']) > 1e-9) {
+                foreach ($candidates as $otherField => $other) {
+                    // Equal rain increments can round differently in counters with different totals.
+                    // Only the source's known encoded step can excuse that disagreement.
+                    $tolerance = max($tolerances[$field], $tolerances[$otherField]) + 1e-9;
+                    if ($other['amount'] !== null && abs($candidate['amount'] - $other['amount']) > $tolerance) {
                         $candidate['amount'] = null;
                         $candidate['status'] = 'conflict';
                         return $candidate;

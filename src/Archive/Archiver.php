@@ -231,7 +231,7 @@ final class Archiver
             }
             // Derived per packet, before accumulating: the dew point of an
             // average hour is not a thing that happened.
-            $accum->addRecord($derived->applyPacket($record, $packet->sender, $this->rainInputs($quality, $packet, $units)), $this->settings->loopHilo, 1);
+            $accum->addRecord($derived->applyPacket($record, $packet->sender, $this->rainInputs($quality, $packet, $units), $this->rainResolutions($packet, $units)), $this->settings->loopHilo, 1);
             ++$packets;
         }
         $hardware = Hardware::aggregate($start, $stop, $hardwareInputs, $this->policy);
@@ -339,15 +339,32 @@ final class Archiver
             return null;
         }
         $record = $this->sound(Quality::fromConfig($this->config), $last, $units);
-        return $record === null ? null : $derived->applyPacket($record, $last->sender, $this->rainInputs(Quality::fromConfig($this->config), $last, $units));
+        return $record === null ? null : $derived->applyPacket($record, $last->sender, $this->rainInputs(Quality::fromConfig($this->config), $last, $units), $this->rainResolutions($last, $units));
     }
 
     private function seed(Derived $derived, Quality $quality, Packet $packet, UnitSystem $units): void
     {
         $record = $this->sound($quality, $packet, $units);
         if ($record !== null) {
-            $derived->seed($record, $packet->sender, $this->rainInputs($quality, $packet, $units));
+            $derived->seed($record, $packet->sender, $this->rainInputs($quality, $packet, $units), $this->rainResolutions($packet, $units));
         }
+    }
+
+    /** @return array<string, float> */
+    private function rainResolutions(Packet $packet, UnitSystem $units): array
+    {
+        if ($packet->driver !== 'ecowitt') {
+            return [];
+        }
+        // Ecowitt HTTP rain totals are encoded to 0.001 inch. Conversion and
+        // calibration must scale that step along with the counter values.
+        $step = (float) Units::convert(0.001, 'inch', Units::standardUnit($units, 'group_rain'));
+        $resolutions = [];
+        foreach (RainCounter::FIELDS as $field) {
+            $calibration = $this->config->calibrate[$packet->sender][$field] ?? null;
+            $resolutions[$field] = $step * abs($calibration === null ? 1.0 : $calibration->scale);
+        }
+        return $resolutions;
     }
 
     /** @return array<string, mixed> */
@@ -677,6 +694,7 @@ final class Archiver
                             continue;
                         }
                         $this->archive->addRecord($built->record, replace: true, updateDaily: false);
+                        $this->archive->storeRainEvidence($built);
                         $builts[] = $built;
                     }
                     $this->archive->rebuildDay($sod);

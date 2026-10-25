@@ -92,10 +92,11 @@ final class Derived
      *
      * @param array<string, mixed> $record A placed packet in the archive's unit system.
      * @param array<string, mixed>|null $counters
+     * @param array<string, float> $resolutions Encoded counter steps in the archive's units.
      */
-    public function seed(array $record, string $sender, ?array $counters = null): void
+    public function seed(array $record, string $sender, ?array $counters = null, array $resolutions = []): void
     {
-        $this->noteRain($this->rainFromCounters($record, $sender, $counters));
+        $this->noteRain($this->rainFromCounters($record, $sender, $counters, resolutions: $resolutions));
     }
 
     /**
@@ -105,10 +106,11 @@ final class Derived
      *
      * @return array<string, mixed>
      * @param array<string, mixed>|null $counters
+     * @param array<string, float> $resolutions Encoded counter steps in the archive's units.
      */
-    public function applyPacket(array $record, string $sender, ?array $counters = null): array
+    public function applyPacket(array $record, string $sender, ?array $counters = null, array $resolutions = []): array
     {
-        $record = $this->derive($this->rainFromCounters($record, $sender, $counters, true));
+        $record = $this->derive($this->rainFromCounters($record, $sender, $counters, true, $resolutions));
         // WeeWX's rain rater sees a packet after the calculations: the rate
         // in a packet is worked out from the rain before it.
         $this->noteRain($record);
@@ -197,13 +199,14 @@ final class Derived
      *
      * @return array<string, mixed>
      * @param array<string, mixed>|null $counters
+     * @param array<string, float> $resolutions
      */
-    private function rainFromCounters(array $record, string $sender, ?array $counters, bool $collect = false): array
+    private function rainFromCounters(array $record, string $sender, ?array $counters, bool $collect = false, array $resolutions = []): array
     {
         $hardware = !$this->wants('rain', $record);
         $counters ??= array_intersect_key($record, array_flip(self::COUNTERS));
         $ordered = array_replace(array_intersect_key(array_fill_keys(self::COUNTERS, null), $counters), $counters);
-        $reading = $this->rainCounter->read($sender, self::timestamp($record), $ordered, $hardware);
+        $reading = $this->rainCounter->read($sender, self::timestamp($record), $ordered, $hardware, $resolutions);
         $this->recoveredRain = !$hardware && $reading['stop'] - $reading['start'] > self::RAIN_PERIOD;
         if (!$hardware && $reading['amount'] !== null) {
             $record['rain'] = $reading['amount'];
