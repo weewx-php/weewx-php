@@ -66,6 +66,34 @@ final class RainCounterTest extends TestCase
         self::assertSame(1.0, $r->read('a', 1180, ['yearRain' => 101, 'dayRain' => 3], false)['amount']);
     }
 
+    public function testKnownEncodingStepAllowsRoundedIncrementsButNotLargerConflicts(): void
+    {
+        $r = $this->tracker();
+        $steps = ['yearRain' => 0.001, 'dayRain' => 0.001];
+        $r->read('a', 1000, ['yearRain' => 179.902, 'dayRain' => 0.012], false, $steps);
+        $rain = $r->read('a', 1060, ['yearRain' => 179.909, 'dayRain' => 0.020], false, $steps);
+        self::assertSame('complete', $rain['status']);
+        self::assertSame('yearRain', $rain['counter']);
+        self::assertEqualsWithDelta(0.007, $rain['amount'], 1e-12);
+        self::assertSame('conflict', $r->read('a', 1120, ['yearRain' => 179.916, 'dayRain' => 0.029], false, $steps)['status']);
+
+        $strict = $this->tracker();
+        $strict->read('a', 1000, ['yearRain' => 179.902, 'dayRain' => 0.012], false);
+        self::assertSame('conflict', $strict->read('a', 1060, ['yearRain' => 179.909, 'dayRain' => 0.020], false)['status']);
+    }
+
+    public function testEncodingStepDoesNotHideResetsOrCountReturningCountersTwice(): void
+    {
+        $r = $this->tracker();
+        $steps = ['yearRain' => 0.001, 'dayRain' => 0.001];
+        $r->read('a', 1000, ['yearRain' => 1.0, 'dayRain' => 0.2], false, $steps);
+        self::assertSame('reset', $r->read('a', 1060, ['yearRain' => 0.999, 'dayRain' => 0.199], false, $steps)['status']);
+        self::assertEqualsWithDelta(0.008, $r->read('a', 1120, ['dayRain' => 0.207], false, $steps)['amount'], 1e-12);
+        $rain = $r->read('a', 1180, ['yearRain' => 1.014, 'dayRain' => 0.215], false, $steps);
+        self::assertSame('dayRain', $rain['counter']);
+        self::assertEqualsWithDelta(0.008, $rain['amount'], 1e-12);
+    }
+
     public function testRollingWindowsAndRatesAreNotCounterInputs(): void
     {
         $d = new \WeewxPhp\Archive\Derived(new \WeewxPhp\Archive\Site(null, null, null, new DateTimeZone('UTC')), new FakeHistory(null), \WeewxPhp\Archive\Derivable::policy([]));

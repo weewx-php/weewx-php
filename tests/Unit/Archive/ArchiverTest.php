@@ -380,6 +380,85 @@ final class ArchiverTest extends TestCase
         $archiver->close();
     }
 
+    public function testRoundedEcowittCountersRemainVisibleInEveryArchiveUnitSystem(): void
+    {
+        $before = ['totalrainin' => '179.902', 'yearlyrainin' => '179.902', 'monthlyrainin' => '1.461',
+            'weeklyrainin' => '0.012', 'dailyrainin' => '0.012', 'eventrainin' => '0.051'];
+        $after = ['totalrainin' => '179.909', 'yearlyrainin' => '179.909', 'monthlyrainin' => '1.469',
+            'weeklyrainin' => '0.020', 'dailyrainin' => '0.020', 'eventrainin' => '0.059'];
+        foreach ([[self::T0 - 30, $before], [self::T0 + 20, $after]] as [$when, $fields]) {
+            $data = \WeewxPhp\Ingest\Parser::observation(
+                \WeewxPhp\Ingest\Protocol::Ecowitt,
+                $fields + ['PASSKEY' => str_repeat('A', 32), 'dateutc' => 'now', 'tempf' => '70'],
+                $when,
+            );
+            $this->live->add(new Packet($when, $data->units, $data->data, 'ecowitt', 'ecowitt'), ['kirchdorf'], 300, now: $when);
+        }
+        foreach (UnitSystem::cases() as $system) {
+            $config = Archives::config(
+                database: $this->dir . '/' . $system->name . '.sdb',
+                unitSystem: $system,
+                explicitMapping: true,
+                fields: ['ecowitt' => ['dayRain' => 'rain', 'outTemp' => 'outTemp']],
+            );
+            $archiver = $this->archiver($config);
+            $built = $archiver->build(self::T0 + 300);
+            self::assertNotNull($built);
+            $unit = \WeewxPhp\Weewx\Units::standardUnit($system, 'group_rain');
+            self::assertEqualsWithDelta(\WeewxPhp\Weewx\Units::convert(0.007, 'inch', $unit), $built->record['rain'], 1e-9);
+            self::assertSame([], $built->rainEvidence);
+            self::assertTrue($archiver->store($built));
+            $wx = new \WeewxPhp\Frontend\Weather(
+                new \WeewxPhp\Config\Config($this->settings, [], [$config->id => $config], []),
+                clock: $this->clock,
+                budget: new \WeewxPhp\Frontend\ReadBudget(milliseconds: 10000),
+            );
+            try {
+                self::assertEqualsWithDelta(0.1778, $wx->day()->sum('rain')->value()->to('mm')->raw, 1e-9);
+            } finally {
+                $wx->close();
+                $archiver->close();
+            }
+        }
+    }
+
+    public function testCounterPrecisionFollowsCalibrationAndLeavesOtherDriversStrict(): void
+    {
+        foreach (['ecowitt', 'native'] as $driver) {
+            $sender = $driver;
+            foreach ([[self::T0 - 30, 179.902, 0.012], [self::T0 + 20, 179.909, 0.020]] as [$when, $year, $day]) {
+                $this->live->add(
+                    new Packet($when, UnitSystem::US, ['yearRain' => $year, 'dayRain' => $day], $sender, $driver),
+                    ['kirchdorf'],
+                    300,
+                    now: $when,
+                );
+            }
+            $config = Archives::config(
+                database: $this->dir . '/' . $driver . '.sdb',
+                senders: [$sender],
+                primary: $sender,
+                explicitMapping: true,
+                fields: [$sender => ['dayRain' => 'rain']],
+                calibrate: [$sender => ['yearRain' => new \WeewxPhp\Config\Calibration(0, 2), 'dayRain' => new \WeewxPhp\Config\Calibration(0, 2)]],
+            );
+            $archiver = $this->archiver($config);
+            try {
+                $built = $archiver->build(self::T0 + 300);
+                self::assertNotNull($built);
+                if ($driver === 'ecowitt') {
+                    self::assertEqualsWithDelta(0.3556, $built->record['rain'], 1e-9);
+                    self::assertSame([], $built->rainEvidence);
+                } else {
+                    self::assertNull($built->record['rain']);
+                    self::assertSame('conflict', $built->rainEvidence[0]['status']);
+                }
+            } finally {
+                $archiver->close();
+            }
+        }
+    }
+
     // -- helpers ----------------------------------------------------------
 
     private function archiver(?ArchiveConfig $config = null): Archiver
