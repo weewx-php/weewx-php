@@ -114,6 +114,31 @@ final class ArchiverTest extends TestCase
         $archiver->close();
     }
 
+    public function testLateReplacementKeepsExtremesWhoseLoopInputWasPruned(): void
+    {
+        $this->add(self::T0 + 10, ['outTemp' => 40.0]);
+        $this->add(self::T0 + 100, ['outTemp' => 20.0]);
+        $this->add(self::T0 + 1200, ['outTemp' => 25.0]);
+        $this->add(self::T0 + 2410, ['outTemp' => 10.0]);
+        $this->add(self::T0 + 2500, ['outTemp' => 20.0]);
+        $archiver = $this->archiver();
+        try {
+            $archiver->processDue(self::T0 + 3600, Budget::unlimited($this->clock));
+            self::assertSame(30.0, $archiver->archive()->record(self::T0 + 300)['outTemp'] ?? null);
+            self::assertSame(2, $this->live->prune(self::T0 + 900));
+            $this->add(self::T0 + 2600, ['outTemp' => 30.0]);
+            self::assertSame(1, $archiver->processDue(self::T0 + 3600, Budget::unlimited($this->clock), true));
+            $stats = $archiver->archive()->loadDay(self::T0 - 39_000, UnitSystem::METRICWX)->get('outTemp');
+            self::assertInstanceOf(ScalarStats::class, $stats);
+            self::assertSame(40.0, $stats->max);
+            self::assertSame(self::T0 + 10, $stats->maxtime);
+            self::assertSame(75.0 * 300, $stats->wsum);
+            self::assertSame(3, $stats->count);
+        } finally {
+            $archiver->close();
+        }
+    }
+
     public function testLateReplacementRemovesExtremesFromTheOldRecord(): void
     {
         $this->add(self::T0 + 10, ['windSpeed' => 10.0]);

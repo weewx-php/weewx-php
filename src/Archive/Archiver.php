@@ -19,9 +19,11 @@ use WeewxPhp\Weewx\Accum;
 use WeewxPhp\Weewx\AccumError;
 use WeewxPhp\Weewx\Intervals;
 use WeewxPhp\Weewx\Policy;
+use WeewxPhp\Weewx\ScalarStats;
 use WeewxPhp\Weewx\SchemaError;
 use WeewxPhp\Weewx\Units;
 use WeewxPhp\Weewx\UnitSystem;
+use WeewxPhp\Weewx\VecStats;
 
 /**
  * Turns the journal's packets into archive records and daily summaries:
@@ -693,7 +695,9 @@ final class Archiver
     private function repairDay(int $sod): void
     {
         $eod = Intervals::endOfDay($sod, $this->config->timezone);
+        $previous = $this->archive->loadDay($sod, $this->archive->unitSystem());
         $day = new Accum($sod, $eod, $this->archive->unitSystem(), $this->policy);
+        $covered = [];
         foreach ($this->archive->records($sod, $eod) as $record) {
             $interval = $record['interval'] ?? null;
             if ((!is_int($interval) && !is_float($interval)) || $interval <= 0) {
@@ -708,11 +712,54 @@ final class Archiver
                 $built = $this->build($stop, $seconds);
                 if ($built !== null && $built->packets > 0) {
                     $day->mergeHilo($built->accumulator);
+                    $covered[] = $built->accumulator;
                 }
             }
             $day->addRecord($record, true, $interval * 60);
         }
+        $this->preservePrunedExtremes($day, $previous, $covered);
         $this->archive->replaceDay($sod, $day);
+    }
+
+    /** @param list<Accum> $covered Intervals whose LOOP extremes were reconstructed. */
+    private function preservePrunedExtremes(Accum $day, Accum $previous, array $covered): void
+    {
+        // Archive averages cannot reproduce LOOP extremes. Retain their values
+        // and packet times when the source interval could not be reconstructed.
+        foreach ($previous->types() as $type) {
+            $old = $previous->get($type);
+            if (!$old instanceof ScalarStats && !$old instanceof VecStats) {
+                continue;
+            }
+            foreach (['min' => 'mintime', 'max' => 'maxtime'] as $field => $timeField) {
+                $value = $old->$field;
+                $timestamp = $old->$timeField;
+                if ($value === null || $timestamp === null) {
+                    continue;
+                }
+                foreach ($covered as $interval) {
+                    if ($interval->includes($timestamp)) {
+                        continue 2;
+                    }
+                }
+                if (!$day->has($type)) {
+                    $day->setStats($type);
+                }
+                $stats = $day->get($type);
+                if (!$stats instanceof ScalarStats && !$stats instanceof VecStats) {
+                    continue;
+                }
+                $current = $stats->$field;
+                if ($current !== null && ($field === 'min' ? $current < $value : $current > $value)) {
+                    continue;
+                }
+                $stats->$field = $value;
+                $stats->$timeField = $timestamp;
+                if ($field === 'max' && $stats instanceof VecStats && $old instanceof VecStats) {
+                    $stats->maxDir = $old->maxDir;
+                }
+            }
+        }
     }
 
     /**
@@ -720,8 +767,8 @@ final class Archiver
      * there, day by day: the day's records first, then its summaries from
      * the archive table, then the LOOP extremes on top. Extremes cannot be
      * subtracted, a maximum does not remember the runner-up, so a day is
-     * corrected by building it from nothing. Returns how many records were
-     * written.
+     * corrected from its records and retained LOOP input. Extremes whose input
+     * was pruned are preserved. Returns how many records were written.
      */
     public function rebuild(int $start, int $stop): int
     {
