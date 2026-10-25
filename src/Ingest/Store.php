@@ -108,6 +108,17 @@ final class Store
         return $expected !== null && hash_equals($expected, $offered);
     }
 
+    public function wundergroundKeyMatches(string $offered): bool
+    {
+        $digest = hash('sha256', $offered);
+        $known = $this->db->scalar("SELECT credential FROM ingest_sender WHERE protocol = 'wunderground' AND credential = ?", [$digest]);
+        if ($known !== null) {
+            return hash_equals(Sqlite::text($known), $digest);
+        }
+        $setup = $this->meta('wunderground');
+        return $setup !== null && hash_equals($setup, $offered);
+    }
+
     /** Authenticate before parsing measurements, so malformed readings affect their own sender.
      * The receiver must validate the Ecowitt path before calling this method.
      */
@@ -300,15 +311,15 @@ final class Store
         return $this->db->transaction(fn(): bool => $this->permitPeer($peer, $now, $config) && $this->permitDiscovery($now, $config));
     }
 
-    /** Bound request work before reading a body, including requests with known credentials. */
-    public function permitPeer(string $peer, int $now, IngestConfig $config): bool
+    /** Bound pre-body work. Verified credentials bypass only the shared overflow bucket. */
+    public function permitPeer(string $peer, int $now, IngestConfig $config, bool $preauthenticated = false): bool
     {
         $peer = self::peerBucket($peer);
-        return $this->db->transaction(function () use ($peer, $now, $config): bool {
+        return $this->db->transaction(function () use ($peer, $now, $config, $preauthenticated): bool {
             $this->pruneLimits($now);
             // Failure blocks are checked after authentication so known consoles
             // behind a blocked discovery IP keep their sender allowance.
-            return $this->limit($peer, $now, $config->requestsPerMinute, false);
+            return $this->limit($peer, $now, $config->requestsPerMinute, false, $preauthenticated);
         });
     }
 
@@ -333,18 +344,19 @@ final class Store
         return $until !== null && (int) Sqlite::text($until) > $now;
     }
 
-    private function limit(string $key, int $now, int $limit, bool $sender): bool
+    private function limit(string $key, int $now, int $limit, bool $sender, bool $preauthenticated = false): bool
     {
         $row = $this->db->one('SELECT * FROM ingest_limit WHERE peer = ?', [$key]);
         if ($row === null) {
-            // Authenticated sender rows have a separate, inherently bounded
-            // namespace, so an IP-table flood cannot consume their slots.
-            if (!$sender) {
-                $count = (int) Sqlite::text($this->db->scalar("SELECT COUNT(*) FROM ingest_limit WHERE peer NOT LIKE 'sender:%'"));
+            // Reserved counters and authenticated sender quotas cannot be displaced
+            // by discovery. Active peer windows and failure blocks are never evicted.
+            if (!$sender && !in_array($key, ['*', 'overflow'], true)) {
+                $count = (int) Sqlite::text($this->db->scalar("SELECT COUNT(*) FROM ingest_limit WHERE peer NOT LIKE 'sender:%' AND peer NOT IN ('*', 'overflow')"));
                 if ($count >= 4096) {
-                    // Keep sender quotas and the global counter intact. Expired
-                    // peer windows leave first, then the least recently seen peers.
-                    $this->db->exec("DELETE FROM ingest_limit WHERE peer IN (SELECT peer FROM ingest_limit WHERE peer NOT LIKE 'sender:%' AND peer != '*' ORDER BY CASE WHEN window < ? AND blocked_until <= ? THEN 0 ELSE 1 END, touched, peer LIMIT ?)", [intdiv($now, 60), $now, $count - 4095]);
+                    $count -= $this->db->exec("DELETE FROM ingest_limit WHERE peer IN (SELECT peer FROM ingest_limit WHERE peer NOT LIKE 'sender:%' AND peer NOT IN ('*', 'overflow') AND window < ? AND blocked_until <= ? ORDER BY touched, peer LIMIT ?)", [intdiv($now, 60), $now, $count - 4095]);
+                    if ($count >= 4096) {
+                        return $preauthenticated || $this->limit('overflow', $now, $limit, false);
+                    }
                 }
             }
             $this->db->exec(
@@ -411,7 +423,7 @@ final class Store
         if ($now - (int) ($this->meta('limits_pruned') ?? '0') < 600) {
             return;
         }
-        $this->db->exec('DELETE FROM ingest_limit WHERE touched < ? AND blocked_until < ?', [$now - 3600, $now]);
+        $this->db->exec('DELETE FROM ingest_limit WHERE touched < ? AND window < ? AND blocked_until <= ?', [$now - 3600, intdiv($now, 60), $now]);
         $this->db->exec("INSERT INTO ingest_meta VALUES ('limits_pruned', ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value", [(string) $now]);
     }
 

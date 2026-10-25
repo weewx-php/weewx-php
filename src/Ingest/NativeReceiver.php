@@ -38,8 +38,12 @@ final class NativeReceiver
             $token = preg_match('/^Bearer ([a-f0-9]{64})$/D', $authorization, $match) === 1 ? $match[1] : '';
             $known = $token === '' ? null : $store->knownCollector($token);
             $limited = true;
+            $preauthenticated = $known !== null && $method === 'POST' && $query === '' && $https;
+            if (!$admission->permitPeer($peer, $now, $config->ingest, $preauthenticated)) {
+                throw new Rejected('rate_limited', 429);
+            }
             if ($known === null || !$store->trusted($known)) {
-                if (!$admission->permit($peer, $now, $config->ingest) || $admission->blocked($peer, $now)) {
+                if (!$admission->permitDiscovery($now, $config->ingest) || $admission->blocked($peer, $now)) {
                     throw new Rejected('rate_limited', 429);
                 }
             }
