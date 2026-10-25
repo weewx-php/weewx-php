@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\CoreUpdate;
@@ -34,9 +36,33 @@ final class Guard
             throw new \RuntimeException('Core update in progress');
         }
         self::$handles[$root] = $handle;
-        if (is_file($directory . '/pending.json')) {
+        // The runtime flock dies with PHP. The marker distinguishes its stale
+        // directory from an external FTPS deployment that may still be running.
+        $phpLock = is_file($directory . '/lock/php');
+        if (is_link($directory . '/lock') || is_link($directory . '/lock/php')) {
+            self::leave($root);
+            throw new \RuntimeException('Unsafe deployment lock');
+        }
+        if (file_exists($directory . '/lock') && !$phpLock) {
+            self::leave($root);
+            throw new \RuntimeException('External core deployment in progress');
+        }
+        if (is_file($directory . '/pending.json') || $phpLock) {
             self::exclusive($root);
+            $owned = $phpLock;
             try {
+                if (!$owned) {
+                    if (!@mkdir($directory . '/lock', 0700)) {
+                        throw new \RuntimeException('External core deployment in progress');
+                    }
+                    $owned = true;
+                    if (file_put_contents($directory . '/lock/php', '') === false) {
+                        throw new \RuntimeException('Cannot mark PHP deployment lock');
+                    }
+                }
+                if (!is_file($directory . '/pending.json')) {
+                    return true;
+                }
                 // Recovery uses the installer saved before any core file was replaced.
                 $pending = json_decode((string) file_get_contents($directory . '/pending.json'), true, 16, JSON_THROW_ON_ERROR);
                 $id = is_array($pending) ? ($pending['transaction'] ?? null) : null;
@@ -47,6 +73,12 @@ final class Guard
                 require_once $directory . '/' . $id . '/installer.php';
                 Installer::recover($root);
             } finally {
+                if ($owned) {
+                    if (is_file($directory . '/lock/php')) {
+                        unlink($directory . '/lock/php');
+                    }
+                    rmdir($directory . '/lock');
+                }
                 self::shared($root);
             }
         }

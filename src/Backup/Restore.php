@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Backup;
@@ -162,9 +164,24 @@ final class Restore
     private static function relocate(ConfFile $file, string $data, array $archives): void
     {
         $file->root()->set('data_dir', str_replace('\\', '/', $data));
+        // Package code is not included in a backup. Restored paths must not execute old installations.
+        foreach ($file->root()->optionalSection('Extensions')?->sections() ?? [] as $extension) {
+            $extension->set('enabled', 'false');
+        }
+        $themes = $file->root()->optionalSection('Themes');
+        if ($themes !== null) {
+            $themes->set('active', 'basic');
+            foreach ($themes->sections() as $id => $theme) {
+                if ($theme->has('entry') || $theme->has('directory')) {
+                    $theme->remove('entry');
+                    $theme->remove('directory');
+                    $theme->remove('managed_release');
+                }
+            }
+        }
         foreach ($file->root()->optionalSection('Archives')?->sections() ?? [] as $id => $archive) {
             // Historical configurations may include archives removed since then.
-            $archive->set('database', $archives[$id] ?? 'removed-' . hash('sha256', $id) . '.sdb');
+            $archive->set('database', $archives[$id] ?? 'removed-' . hash('sha256', (string) $id) . '.sdb');
         }
     }
 }

@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Admin;
@@ -16,10 +18,10 @@ final class Controller
     public function handle(string $method, array $query, array $post, ?string $cookie, string $peer, bool $https): Response
     {
         if (!$https && !($this->localHttp && in_array($peer, ['127.0.0.1', '::1'], true))) {
-            return new Response(403, 'HTTPS required');
+            return new Response(403, (new Translator())->text('error.https_required'));
         }
         if (!in_array($method, ['GET', 'POST'], true)) {
-            return new Response(405, 'Method not allowed');
+            return new Response(405, (new Translator())->text('error.method_not_allowed'));
         }
         $auth = null;
         try {
@@ -127,7 +129,7 @@ final class Controller
             $view = new Page($read, $translator, $session['csrf'], $post, $this->http);
             if (!$session['authenticated']) {
                 if (Input::text($query, 'download') !== '') {
-                    return new Response(403, 'Forbidden', $session['token']);
+                    return new Response(403, $translator->text('error.forbidden'), $session['token']);
                 }
                 if (Input::text($query, 'format') === 'column') {
                     return new Response(403, '{}', $session['token'], contentType: 'application/json; charset=utf-8');

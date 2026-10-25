@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Admin;
@@ -45,6 +47,7 @@ final class ReadModel
             $found[Sqlite::text($row['id'])] = $row;
         }
         foreach ($this->config->stations as $id => $station) {
+            $id = $station->id;
             if (isset($found[$id])) {
                 $found[$id]['name'] = $station->name;
             } else {

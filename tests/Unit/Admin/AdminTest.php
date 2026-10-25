@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Admin;
@@ -92,6 +94,121 @@ final class AdminTest extends TestCase
         } finally {
             $runtime->close();
         }
+    }
+
+    public function testCookielessRequestsCannotExhaustLoginSessions(): void
+    {
+        $settings = Config::load($this->path)->settings;
+        $auth = new Auth($settings);
+        $auth->setPassword('correct-password', self::NOW);
+        $session = $auth->session(null, self::NOW);
+        $signedIn = $auth->login($session['token'], $session['csrf'], 'correct-password', '::1', self::NOW);
+        $db = Changes::store($settings);
+        $db->exec("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<2000) INSERT INTO admin_session SELECT printf('%064d',i), 'csrf', ?, 0 FROM n", [self::NOW + 900]);
+        $db->close();
+        self::assertFalse($auth->session(null, self::NOW)['authenticated']);
+        self::assertTrue($auth->session($signedIn['token'], self::NOW)['authenticated']);
+        self::assertSame((new Translator())->text('status.rain_input'), 'Rain calculation');
+        $auth->close();
+    }
+
+    public function testGlobalFailuresDelayLoginAndIpv6AttemptsShareASubnet(): void
+    {
+        $settings = Config::load($this->path)->settings;
+        $auth = new Auth($settings);
+        $auth->setPassword('correct-password', self::NOW);
+        $session = $auth->session(null, self::NOW);
+        $db = Changes::store($settings);
+        $db->exec('INSERT INTO admin_login VALUES (?, ?, 50)', ['*', self::NOW]);
+        $db->close();
+        $signedIn = $auth->login($session['token'], $session['csrf'], 'correct-password', '192.0.2.1', self::NOW);
+        self::assertTrue($signedIn['authenticated']);
+        $session = $auth->session(null, self::NOW);
+        try {
+            for ($i = 1; $i <= 5; ++$i) {
+                try {
+                    $auth->login($session['token'], $session['csrf'], 'wrong', '2001:db8::' . $i, self::NOW);
+                    self::fail('A wrong password must fail');
+                } catch (Problem $error) {
+                    self::assertSame('error.login', $error->getMessage());
+                }
+            }
+            $this->expectExceptionMessage('error.rate_limit');
+            $auth->login($session['token'], $session['csrf'], 'correct-password', '2001:db8::6', self::NOW);
+        } finally {
+            $auth->close();
+        }
+    }
+
+    public function testMappedIpv4PeersHaveIndependentLoginLimits(): void
+    {
+        $auth = new Auth(Config::load($this->path)->settings);
+        $auth->setPassword('correct-password', self::NOW);
+        $session = $auth->session(null, self::NOW);
+        try {
+            for ($i = 0; $i < 5; ++$i) {
+                try {
+                    $auth->login($session['token'], $session['csrf'], 'wrong', '::ffff:192.0.2.1', self::NOW);
+                    self::fail('A wrong password must fail');
+                } catch (Problem $error) {
+                    self::assertSame('error.login', $error->getMessage());
+                }
+            }
+            self::assertTrue($auth->login($session['token'], $session['csrf'], 'correct-password', '::ffff:203.0.113.9', self::NOW)['authenticated']);
+        } finally {
+            $auth->close();
+        }
+    }
+
+    public function testConcurrentLoginFailuresCannotOverrunTheBucketLimit(): void
+    {
+        $settings = Config::load($this->path)->settings;
+        $auth = new Auth($settings);
+        $auth->setPassword('correct-password', self::NOW);
+        $session = $auth->session(null, self::NOW);
+        $auth->close();
+        $db = Changes::store($settings);
+        $db->exec('INSERT INTO admin_login VALUES (?, ?, 4)', [hash('sha256', '192.0.2.1'), self::NOW]);
+        $db->close();
+        $code = <<<'PHP'
+            require '/repo/src/autoload.php';
+            $auth = new WeewxPhp\Admin\Auth(WeewxPhp\Config\Config::load($argv[1])->settings);
+            echo "ready\n";
+            while (!is_file($argv[5])) {
+                usleep(1000);
+            }
+            try {
+                $auth->login($argv[2], $argv[3], 'wrong', '192.0.2.1', (int) $argv[4]);
+                echo 'authenticated';
+            } catch (WeewxPhp\Admin\Problem $error) {
+                echo $error->getMessage();
+            }
+            $auth->close();
+            PHP;
+        $children = [];
+        $gate = $this->dir . '/start';
+        for ($i = 0; $i < 12; ++$i) {
+            $process = proc_open([PHP_BINARY, '-r', $code, $this->path, $session['token'], $session['csrf'], (string) self::NOW, $gate], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+            self::assertIsResource($process);
+            $children[] = [$process, $pipes];
+        }
+        foreach ($children as [$process, $pipes]) {
+            self::assertSame("ready\n", fgets($pipes[1]));
+        }
+        touch($gate);
+        $outcomes = [];
+        foreach ($children as [$process, $pipes]) {
+            $outcomes[] = stream_get_contents($pipes[1]);
+            $error = stream_get_contents($pipes[2]);
+            fclose($pipes[1]);
+            fclose($pipes[2]);
+            self::assertSame(0, proc_close($process), (string) $error);
+        }
+        self::assertSame(1, count(array_filter($outcomes, static fn($result): bool => $result === 'error.login')));
+        self::assertSame(11, count(array_filter($outcomes, static fn($result): bool => $result === 'error.rate_limit')));
+        $db = Changes::store($settings);
+        self::assertSame(5, $db->scalar('SELECT failures FROM admin_login WHERE peer = ?', [hash('sha256', '192.0.2.1')]));
+        $db->close();
     }
 
     public function testCompleteWorkflowCustomUnitsIndependentStationsAndRevisions(): void

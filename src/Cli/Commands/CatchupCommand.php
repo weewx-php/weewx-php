@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Cli\Commands;
@@ -52,6 +54,7 @@ final class CatchupCommand implements Command
             $runtime->refresh();
             $archives = isset($args[0]) ? array_intersect_key($runtime->config->archives, [$args[0] => true]) : $runtime->config->archives;
             foreach ($archives as $id => $archive) {
+                $id = $archive->id;
                 if (!$archive->enabled) {
                     continue;
                 }

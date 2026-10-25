@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
 "use strict";
 
 (() => {
@@ -34,7 +35,7 @@
     if (!response.ok) throw new Error(result.error || labels.failed);
     return result;
   }
-  const size = bytes => new Intl.NumberFormat(document.documentElement.lang, {maximumFractionDigits: 1}).format(bytes / 1048576) + " MB";
+  const size = bytes => new Intl.NumberFormat(document.documentElement.lang, {maximumFractionDigits: 1}).format(bytes / 1048576) + " " + labels.mib;
   function ready(data) {
     current = data;
     form.hidden = false;

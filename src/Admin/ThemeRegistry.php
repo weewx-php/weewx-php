@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Admin;
@@ -20,6 +22,7 @@ final class ThemeRegistry
         $base = dirname($resolved === false ? $path : $resolved);
         $packages = [];
         foreach ($file->root()->optionalSection('Themes')?->sections() ?? [] as $id => $section) {
+            $id = (string) $id;
             $local = $section->optional('directory')?->string();
             if ($id !== 'basic' && $local !== null) {
                 $packages[$id] = self::localDirectory($local, $base);
@@ -81,7 +84,7 @@ final class ThemeRegistry
      * @return list<string> */
     public function themes(): array
     {
-        $found = array_keys($this->packages);
+        $found = array_map('strval', array_keys($this->packages));
         $paths = glob($this->directory . '/*/settings.json');
         foreach ($paths === false ? [] : $paths as $path) {
             try {

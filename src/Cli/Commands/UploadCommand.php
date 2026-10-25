@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Cli\Commands;
@@ -64,6 +66,7 @@ final class UploadCommand implements Command
         }
         $zone = $runtime->config->settings->timezone;
         foreach ($uploads as $id => $config) {
+            $id = $config->id;
             $state = $runtime->state()->upload($id);
             $console->line(sprintf('%s  %s, archive %s, %s', $id, $config->kind->label(), $config->archive, self::rhythm($config)));
             try {
@@ -103,6 +106,7 @@ final class UploadCommand implements Command
         }
         $problems = 0;
         foreach ($chosen as $id => $config) {
+            $id = $config->id;
             try {
                 $answer = $runtime->uploads()->make($config)->check();
             } catch (Throwable $error) {
@@ -152,7 +156,7 @@ final class UploadCommand implements Command
                 return Application::USAGE_ERROR;
             }
         }
-        foreach (array_keys($chosen) as $id) {
+        foreach (array_map('strval', array_keys($chosen)) as $id) {
             $runtime->state()->unblockUpload($id);
             if ($again) {
                 $runtime->state()->rewindUpload($id, 0);
@@ -175,7 +179,7 @@ final class UploadCommand implements Command
                     $archivers[$config->archive] = Archiver::open($archive, $runtime->config->settings, $runtime->live(), $runtime->state(), $runtime->log, $now);
                 }
             }
-            $outcome = $runtime->uploads()->run(Budget::unlimited($runtime->clock), $archivers, $now, forced: true, only: array_keys($chosen));
+            $outcome = $runtime->uploads()->run(Budget::unlimited($runtime->clock), $archivers, $now, forced: true, only: array_map('strval', array_keys($chosen)));
         } finally {
             foreach ($archivers as $archiver) {
                 $archiver->close();
@@ -208,7 +212,7 @@ final class UploadCommand implements Command
             return $uploads;
         }
         if (!isset($uploads[$name])) {
-            $names = implode(', ', array_keys($uploads));
+            $names = implode(', ', array_map('strval', array_keys($uploads)));
             $app->console()->error(sprintf('no upload %s; there are: %s', $name, $names === '' ? 'none' : $names));
             return null;
         }

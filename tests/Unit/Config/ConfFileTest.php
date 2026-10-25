@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Config;
@@ -11,6 +13,77 @@ use WeewxPhp\Tests\Support\TempDir;
 
 final class ConfFileTest extends TestCase
 {
+    public function testBomNumericNamesAndQuotedKeysRoundTrip(): void
+    {
+        $file = ConfFile::parse("\xEF\xBB\xBFdata_dir = data\n[Stations]\n[[2024]]\nname = Roof\n[Archives]\n[[2025]]\nprimary = 2024\n[Uploads]\n[[2026]]\nkind = wunderground\nstation = 12345\npassword = key\n");
+        $file->root()->set('a=b', 'value');
+        $file->root()->set('[key', 'other');
+        $text = $file->toString();
+        $read = ConfFile::parse($text);
+        self::assertSame('data', $read->root()->value('data_dir')->string());
+        self::assertSame('value', $read->root()->value('a=b')->string());
+        self::assertSame('other', $read->root()->value('[key')->string());
+        $config = \WeewxPhp\Config\ConfigReader::read($read, '/tmp');
+        self::assertSame('2024', array_values($config->stations)[0]->id);
+        self::assertSame('2025', array_values($config->archives)[0]->id);
+        self::assertSame('2025', array_values($config->uploads)[0]->archive);
+        self::assertSame('12345', array_values($config->uploads)[0]->text('station'));
+        $dir = TempDir::create('numeric-config');
+        try {
+            $read->root()->set('data_dir', $dir . '/data');
+            $archive = $read->root()->section('Archives')->section('2025');
+            $archive->set('senders', '2024');
+            $archive->set('explicit_mapping', 'true');
+            $archive->addSection('fields')->addSection('2024')->set('outTemp', 'outTemp');
+            mkdir($dir . '/data');
+            mkdir($dir . '/data/archives');
+            $path = $dir . '/weather.conf';
+            $read->write($path);
+            $model = new \WeewxPhp\Admin\ReadModel($path);
+            $snapshot = \WeewxPhp\Archive\Revisions::snapshot($model->file, $model->config);
+            self::assertStringContainsString('[[2024]]', $snapshot);
+            (new \WeewxPhp\Admin\Service($path, 1788609600))->execute('settings.save', ['revision' => $model->revision, 'backup_retention_days' => '7']);
+            self::assertSame(7, \WeewxPhp\Config\Config::load($path)->settings->backupRetentionDays);
+            // The Fields page posts mapping[2024][...], which PHP decodes with an int key.
+            $model = new \WeewxPhp\Admin\ReadModel($path);
+            (new \WeewxPhp\Admin\Service($path, 1788609600))->execute('mapping.save_all', ['revision' => $model->revision, 'archive' => '2025', 'mapping' => ['2024' => ['outTemp' => 'outTemp']]]);
+            $saved = \WeewxPhp\Config\Config::load($path)->archive('2025');
+            self::assertNotNull($saved);
+            self::assertSame(['2024' => ['outTemp' => 'outTemp']], $saved->fields);
+            $runtime = \WeewxPhp\Tick\Runtime::boot($path, new \WeewxPhp\Time\FixedClock(1788609600), new \WeewxPhp\Log\MemoryLogger());
+            try {
+                $outcome = (new \WeewxPhp\Tick\Tick($runtime))->run('test');
+                self::assertSame('ok', $outcome->status);
+                $result = $outcome->archives['2025'] ?? null;
+                self::assertIsArray($result);
+                self::assertArrayNotHasKey('error', $result);
+            } finally {
+                $runtime->close();
+            }
+            $model = new \WeewxPhp\Admin\ReadModel($path);
+            $page = new \WeewxPhp\Admin\Page($model, new \WeewxPhp\Admin\Translator(), 'csrf');
+            foreach (['archives', 'fields', 'settings'] as $name) {
+                self::assertStringContainsString('<html', $page->render($name, ['archive' => '2025']));
+            }
+            $weather = new \WeewxPhp\Frontend\Weather($model->config);
+            self::assertSame('2025', $weather->configuration()->id);
+            $weather->close();
+        } finally {
+            TempDir::remove($dir);
+        }
+    }
+
+    public function testKeyQuotingDoesNotRestrictUnquotedValues(): void
+    {
+        $value = 'abc\'d"e=f';
+        $file = ConfFile::parse('');
+        $file->root()->set('credential', $value);
+        $file->root()->set('key=value', 'normal');
+        $read = ConfFile::parse($file->toString());
+        self::assertSame($value, $read->root()->value('credential')->string());
+        self::assertSame('normal', $read->root()->value('key=value')->string());
+    }
+
     public function testNewParentValuesRemainInTheirSectionWhenWritten(): void
     {
         $file = ConfFile::parse("[Archives]\n    [[garden]]\n        [[[fields]]]\n            [[[[sensor]]]]\n                outTemp = extraTemp1\n");

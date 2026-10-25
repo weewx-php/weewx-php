@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Admin;
@@ -20,6 +22,7 @@ final class ExtensionSettings
         $installer = new Installer(new Files($read->config->settings->dataDir . '/extension-store'), Http::client());
         $result = [];
         foreach ($read->file->root()->optionalSection('Extensions')?->sections() ?? [] as $id => $section) {
+            $id = (string) $id;
             try {
                 $release = $installer->installed($id, $section);
                 if ($release !== null && $release->settings !== null) {

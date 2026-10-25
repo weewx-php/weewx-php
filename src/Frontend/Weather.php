@@ -44,7 +44,7 @@ final class Weather
         $this->now = $this->clock->now();
         $this->budget = $budget ?? new ReadBudget();
         $id = $archive ?? array_key_first($config->archives);
-        $this->archiveConfig = $id === null ? throw new QueryError('No archive configured') : ($config->archive($id) ?? throw new QueryError('Unknown archive: ' . $id));
+        $this->archiveConfig = $id === null ? throw new QueryError('No archive configured') : ($config->archive((string) $id) ?? throw new QueryError('Unknown archive: ' . $id));
     }
 
     public static function open(string $configPath, ?string $archive = null): self

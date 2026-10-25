@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Admin;
@@ -325,6 +327,8 @@ final class CoreUpdateTest extends TestCase
         $id = (new Installer($this->root))->install(Package::parse($package, '99.0.0'));
         $directory = $this->root . '/.weewx-deploy';
         copy($directory . '/' . $id . '/manifest.json', $directory . '/pending.json');
+        mkdir($directory . '/lock');
+        file_put_contents($directory . '/lock/php', '');
         Guard::leave($this->root);
         $code = 'require ' . var_export($this->root . '/src/autoload.php', true) . '; echo file_get_contents(' . var_export($this->root . '/public/index.php', true) . ');';
         // A new process has neither the old autoloader nor installer in memory.
@@ -337,6 +341,27 @@ final class CoreUpdateTest extends TestCase
         self::assertSame(0, proc_close($process), (string) $error);
         self::assertSame('<?php echo "old";', $output);
         self::assertFileDoesNotExist($directory . '/pending.json');
+        self::assertDirectoryDoesNotExist($directory . '/lock');
+    }
+
+    public function testExternalDeploymentBlocksRecoveryOfAnInterruptedPhpUpdate(): void
+    {
+        $id = (new Installer($this->root))->install(Package::parse($this->package(), '99.0.0'));
+        $directory = $this->root . '/.weewx-deploy';
+        copy($directory . '/' . $id . '/manifest.json', $directory . '/pending.json');
+        mkdir($directory . '/lock');
+        $published = file_get_contents($this->root . '/public/index.php');
+        Guard::leave($this->root);
+        $code = 'require ' . var_export($this->root . '/src/autoload.php', true) . ';';
+        $process = proc_open([PHP_BINARY, '-r', $code], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        self::assertIsResource($process);
+        stream_get_contents($pipes[1]);
+        stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        self::assertSame(75, proc_close($process));
+        self::assertSame($published, file_get_contents($this->root . '/public/index.php'));
+        self::assertFileExists($directory . '/pending.json');
     }
 
     public function testAdminRequiresLoginAndCsrfAndPersistsChannelSelection(): void

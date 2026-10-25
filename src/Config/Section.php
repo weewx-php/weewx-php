@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Config;
@@ -76,7 +78,7 @@ final class Section
     /** @return list<string> Every key, values and subsections alike, in file order. */
     public function keys(): array
     {
-        return array_keys($this->entries);
+        return array_map('strval', array_keys($this->entries));
     }
 
     public function has(string $key): bool
@@ -107,7 +109,7 @@ final class Section
         $found = [];
         foreach ($this->entries as $key => $entry) {
             if (!$entry instanceof self) {
-                $found[$key] = new Value($this->pathOf($key), $entry);
+                $found[$key] = new Value($this->pathOf((string) $key), $entry);
             }
         }
         return $found;

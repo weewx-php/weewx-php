@@ -89,6 +89,9 @@ credentials and processing/upload cursors remain. No ingestion or uploads run
 during restore. Checksums detect corruption; they are not signatures, so restore
 only packages from trusted storage.
 
+Restoring disables extensions and selects the bundled basic theme. Package code
+is excluded from backups. Reinstall packages before enabling them again.
+
 The returned path is the recovered `weewx-php.conf`. To activate recovery, stop
 the existing cron and ingress, point the application (`WEEWX_PHP_CONF`) and cron
 at that configuration, run `check-config`, then resume ingress and the tick.

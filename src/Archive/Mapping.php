@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Archive;
@@ -103,6 +105,7 @@ final class Mapping
         }
         $missing = [];
         foreach ($this->config->fields as $sender => $placements) {
+            $sender = (string) $sender;
             foreach ($placements as $raw => $target) {
                 if ($target !== '-' && !$schema->hasColumn($target)) {
                     $missing[] = sprintf('%s.%s = %s', $sender, $raw, $target);
@@ -130,6 +133,7 @@ final class Mapping
         if ($this->config->explicitMapping) {
             $writers = [];
             foreach ($this->config->fields as $sender => $fields) {
+                $sender = (string) $sender;
                 if (!$this->config->selects($sender)) {
                     throw new MappingError('Source station is not selected by the archive');
                 }
@@ -184,6 +188,7 @@ final class Mapping
         // from other stations. Never combine two physical gauges.
         $explicit = null;
         foreach ($this->config->fields as $sender => $fields) {
+            $sender = (string) $sender;
             foreach ($fields as $source => $target) {
                 if ($target === 'rain') {
                     $explicit = [$sender, $source];
@@ -196,6 +201,7 @@ final class Mapping
         if ($explicit === null) {
             $snapshotWriters = [];
             foreach ($this->config->fields as $sender => $fields) {
+                $sender = (string) $sender;
                 if (!$this->config->selects($sender)) {
                     continue;
                 }

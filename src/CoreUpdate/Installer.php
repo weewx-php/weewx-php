@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\CoreUpdate;
@@ -59,6 +61,7 @@ final class Installer
         Guard::exclusive($this->root);
         $directory = $this->root . '/.weewx-deploy';
         $lock = null;
+        $deployLock = false;
         try {
             if (is_link($directory . '/ssh.lock')) {
                 throw new \RuntimeException('Unsafe deployment lock');
@@ -67,6 +70,11 @@ final class Installer
             if ($lock === false || !flock($lock, LOCK_EX | LOCK_NB) || file_exists($directory . '/lock') || file_exists($directory . '/pending.json')) {
                 throw new \RuntimeException('Another core deployment is in progress');
             }
+            if (!@mkdir($directory . '/lock', 0700)) {
+                throw new \RuntimeException('Another core deployment is in progress');
+            }
+            $deployLock = true;
+            self::write($directory . '/lock/php', '', 0600);
             $id = 'core-' . bin2hex(random_bytes(12));
             $transaction = $directory . '/' . $id;
             if (!mkdir($transaction, 0700)) {
@@ -99,6 +107,9 @@ final class Installer
             }
             $manifest = json_encode(['transaction' => $id, 'version' => $package->version, 'files' => $files], JSON_THROW_ON_ERROR);
             self::write($transaction . '/manifest.json', $manifest, 0600);
+            if (!is_dir($directory . '/lock')) {
+                throw new \RuntimeException('Core deployment lock was removed');
+            }
             self::write($directory . '/pending.json', $manifest, 0600);
             try {
                 foreach ($files as $name => $item) {
@@ -123,6 +134,12 @@ final class Installer
             }
             return $id;
         } finally {
+            if ($deployLock) {
+                if (is_file($directory . '/lock/php')) {
+                    unlink($directory . '/lock/php');
+                }
+                rmdir($directory . '/lock');
+            }
             if (is_resource($lock)) {
                 flock($lock, LOCK_UN);
                 fclose($lock);

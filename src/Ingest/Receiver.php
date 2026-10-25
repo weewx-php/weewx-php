@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Ingest;
@@ -82,7 +84,7 @@ final class Receiver
                 function (Sender $sender) use ($observation, $now): bool {
                     $this->wrote = $this->runtime->live()->add(
                         $observation->packet($sender, $now, $this->runtime->config->sources[$sender->id] ?? []),
-                        array_keys($this->runtime->config->archives),
+                        array_map('strval', array_keys($this->runtime->config->archives)),
                         $this->runtime->config->settings->archiveInterval,
                         $this->runtime->config->settings->rawRetention > 0,
                         $now,

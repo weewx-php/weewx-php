@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 require dirname(__DIR__, 2) . '/src/autoload.php';
@@ -24,8 +26,8 @@ $config = $config === false || $config === '' ? dirname(__DIR__, 2) . '/weewx-ph
 $https = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== '' && $_SERVER['HTTPS'] !== 'off';
 $response = (new Controller($config, time(), getenv('WEEWX_PHP_ADMIN_HTTP') === '1'))->handle(
     is_string($_SERVER['REQUEST_METHOD'] ?? null) ? $_SERVER['REQUEST_METHOD'] : 'GET',
-    \WeewxPhp\Db\Json::object(json_encode($_GET, JSON_THROW_ON_ERROR)),
-    \WeewxPhp\Db\Json::object(json_encode($_POST, JSON_THROW_ON_ERROR)),
+    \WeewxPhp\Db\Json::object(json_encode($_GET, JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE)),
+    \WeewxPhp\Db\Json::object(json_encode($_POST, JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE)),
     is_string($_COOKIE['weewx_admin'] ?? null) ? $_COOKIE['weewx_admin'] : null,
     is_string($_SERVER['REMOTE_ADDR'] ?? null) ? $_SERVER['REMOTE_ADDR'] : '',
     $https,

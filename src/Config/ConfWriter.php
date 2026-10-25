@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Config;
@@ -43,16 +45,17 @@ final class ConfWriter
         $indent = str_repeat(self::INDENT, $section->depth());
         // New values must precede child headers or they change scope on read.
         foreach (array_merge(array_keys($section->values()), array_keys($section->sections())) as $key) {
+            $key = (string) $key;
             foreach ($section->comments($key) as $line) {
                 $this->out[] = $indent . self::innerComment($line);
             }
             $inline = self::inlineComment($section->inlineComment($key));
             if ($section->isSection($key)) {
                 $child = $section->section($key);
-                $this->out[] = $indent . str_repeat('[', $child->depth()) . self::quote($key) . str_repeat(']', $child->depth()) . $inline;
+                $this->out[] = $indent . str_repeat('[', $child->depth()) . self::quote($key, true) . str_repeat(']', $child->depth()) . $inline;
                 $this->section($child);
             } else {
-                $this->out[] = $indent . self::quote($key) . ' = ' . self::value($section->value($key)->raw()) . $inline;
+                $this->out[] = $indent . self::quote($key, true) . ' = ' . self::value($section->value($key)->raw()) . $inline;
             }
         }
     }
@@ -108,7 +111,7 @@ final class ConfWriter
      * a comma or '#' inside it, whitespace or a quote at either end, or
      * nothing at all.
      */
-    private static function quote(string $text): string
+    private static function quote(string $text, bool $key = false): string
     {
         if ($text === '') {
             return '""';
@@ -120,7 +123,8 @@ final class ConfWriter
         $needsQuotes = str_contains($edge, $text[0])
             || str_contains($edge, $text[strlen($text) - 1])
             || str_contains($text, ',')
-            || str_contains($text, '#');
+            || str_contains($text, '#')
+            || ($key && (str_contains($text, '=') || $text[0] === '['));
         if (!$needsQuotes) {
             return $text;
         }

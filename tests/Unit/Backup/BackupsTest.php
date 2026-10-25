@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Backup;
@@ -113,6 +115,18 @@ final class BackupsTest extends TestCase
         } finally {
             $writer->close();
         }
+    }
+
+    public function testRestoreDisablesPackagesWhoseCodeIsNotIncluded(): void
+    {
+        file_put_contents($this->path, "\n[Extensions]\n[[custom]]\nenabled = true\nentry = data/extension-store/custom/extension.php\n[Themes]\nactive = custom\n[[custom]]\ndirectory = data/theme-store/custom\n", FILE_APPEND);
+        $package = $this->backup();
+        $restored = Restore::run($package, $this->dir . '/restored');
+        $file = ConfFile::read($restored);
+        self::assertFalse($file->root()->section('Extensions')->section('custom')->value('enabled')->bool());
+        self::assertSame('basic', $file->root()->section('Themes')->value('active')->string());
+        self::assertNull($file->root()->section('Themes')->section('custom')->optional('directory'));
+        self::assertSame([], Config::load($restored)->extensions);
     }
 
     public function testDailyScheduleRetentionAndManualRequest(): void

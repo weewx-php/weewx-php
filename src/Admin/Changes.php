@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Admin;
@@ -76,6 +78,7 @@ final class Changes
         $paths = [];
         $schemas = [];
         foreach ($after->archives as $id => $archive) {
+            $id = $archive->id;
             $path = DatabasePath::resolve($after->settings->dataDir, $archive->database);
             $key = DatabasePath::key($path);
             if (isset($paths[$key])) {
@@ -140,6 +143,7 @@ final class Changes
             $config = ConfigReader::read($file, dirname($resolved === false ? $path : $resolved));
             $schemas = \WeewxPhp\Db\Json::object(Sqlite::text($pending['schemas']));
             foreach ($schemas as $id => $mode) {
+                $id = (string) $id;
                 $archive = $config->archive($id) ?? throw new Problem('error.archive');
                 DatabasePath::resolve($settings->dataDir, $archive->database);
                 if ($mode === 'connect') {

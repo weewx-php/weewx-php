@@ -28,5 +28,6 @@
   "updated": "Core updated. Files changed: {detail}",
   "tls_error": "TLS connection failed. Check the server hostname and certificate.",
   "cancelled": "Deployment cancelled.",
-  "error": "Deployment failed. Check the configuration, connection and file permissions."
+  "error": "Deployment failed. Check the configuration, connection and file permissions.",
+  "pending_update": "An interrupted core update must be recovered before deployment."
 }
