@@ -297,21 +297,25 @@ final class Store
     /** Shared across PHP requests/processes; never trusts a client-supplied forwarding header here. */
     public function permit(string $peer, int $now, IngestConfig $config): bool
     {
+        return $this->db->transaction(fn(): bool => $this->permitPeer($peer, $now, $config) && $this->permitDiscovery($now, $config));
+    }
+
+    /** Bound request work before reading a body, including requests with known credentials. */
+    public function permitPeer(string $peer, int $now, IngestConfig $config): bool
+    {
         $peer = self::peerBucket($peer);
         return $this->db->transaction(function () use ($peer, $now, $config): bool {
-            // Only the small limiter table is maintained on reception. Samples
-            // and field inventories are cleaned by the periodic tick.
             $this->pruneLimits($now);
-            foreach ([$peer, '*'] as $key) {
-                $limit = $key === '*' ? $config->requestsPerMinute * 10 : $config->requestsPerMinute;
-                // IP failure blocks are checked AFTER authentication. Known
-                // consoles behind that IP keep their own allowance.
-                if (!$this->limit($key, $now, $limit, false)) {
-                    return false;
-                }
-            }
-            return true;
+            // Failure blocks are checked after authentication so known consoles
+            // behind a blocked discovery IP keep their sender allowance.
+            return $this->limit($peer, $now, $config->requestsPerMinute, false);
         });
+    }
+
+    /** Only discovery consumes the global allowance; call after the peer check. */
+    public function permitDiscovery(int $now, IngestConfig $config): bool
+    {
+        return $this->db->transaction(fn(): bool => $this->limit('*', $now, $config->requestsPerMinute * 10, false));
     }
 
     public function permitSender(?Sender $sender, string $peer, int $now, IngestConfig $config): bool

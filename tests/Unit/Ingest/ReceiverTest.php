@@ -77,7 +77,21 @@ final class ReceiverTest extends TestCase
             $this->runtime->ingest()->permit('192.0.2.' . $i, self::NOW, $config);
         }
         self::assertFalse($this->runtime->ingest()->permit('192.0.2.20', self::NOW, $config));
-        self::assertSame(200, $this->get($this->wu($password))->status);
+        self::assertSame(200, $this->receiver->handle('GET', self::WU, $this->wu($password), static fn(): string => '', '192.0.2.21', true)->status);
+    }
+
+    public function testExhaustedIpDoesNotReadWundergroundPostBodies(): void
+    {
+        $this->runtime->config = new Config($this->runtime->config->settings, [], [], [], ingest: new IngestConfig(enabled: true, requestsPerMinute: 1));
+        $body = $this->wu($this->keys['wunderground']);
+        self::assertSame(200, $this->receiver->handle('POST', self::WU, '', static fn(): string => $body, '192.0.2.50', true)->status);
+        $read = false;
+        $response = $this->receiver->handle('POST', self::WU, '', static function () use (&$read, $body): string {
+            $read = true;
+            return $body;
+        }, '192.0.2.50', true);
+        self::assertFalse($read);
+        self::assertSame(429, $response->status);
     }
 
     public function testBookkeepingFailureAfterLiveCommitStillAcknowledgesDelivery(): void
@@ -396,8 +410,8 @@ final class ReceiverTest extends TestCase
             self::assertSame(429, $send($password)->status);
             self::assertSame(200, $send($otherPassword)->status);
             self::assertSame(429, $send($otherPassword)->status);
-            // Known credentials keep their sender allowance when discovery is busy.
-            self::assertSame('sender rate limited', $send($otherPassword)->body);
+            // The shared IP allowance still bounds work before authentication.
+            self::assertSame('request rate limited', $send($otherPassword)->body);
             $this->clock->advance(60);
             self::assertSame(200, $send($password)->status);
         } finally {
