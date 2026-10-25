@@ -15,10 +15,12 @@ final class ImportFiles
 {
     public const CHUNK = 1048576;
     public readonly string $root;
+    private readonly Config $config;
 
-    public function __construct(private readonly Config $config, private readonly int $now, private readonly string $webspace)
+    public function __construct(private readonly string $configPath, private readonly int $now, private readonly string $webspace)
     {
-        $this->root = $config->settings->dataDir . '/.imports';
+        $this->config = Config::load($configPath);
+        $this->root = $this->config->settings->dataDir . '/.imports';
         if (!is_dir($this->root) && !mkdir($this->root, 0700, true) && !is_dir($this->root)) {
             throw new Problem('error.path');
         }
@@ -84,30 +86,41 @@ final class ImportFiles
     public function discard(string $id): array
     {
         return $this->locked($id, function () use ($id): array {
-            $state = $this->read($id);
-            if (($state['phase'] ?? '') === 'publishing') {
-                $archive = Input::id(Input::text($state, 'archive'));
-                $target = $this->config->settings->dataDir . '/archives/' . $archive . '.sdb';
-                $source = $this->directory($id) . '/archive.sdb';
-                $installed = $this->config->archive($archive);
-                foreach ($this->config->archives as $configured) {
-                    if (DatabasePath::key($configured->database) === DatabasePath::key($target)) {
-                        $installed = $configured;
+            $writer = \WeewxPhp\Tick\Lock::tryAcquire($this->config->settings->lockPath()) ?? throw new Problem('error.busy', status: 409);
+            try {
+                Changes::recover($this->configPath, $this->config->settings);
+                $config = Config::load($this->configPath);
+                $state = $this->read($id);
+                if (($state['phase'] ?? '') === 'publishing') {
+                    $archive = Input::id(Input::text($state, 'archive'));
+                    $target = $this->config->settings->dataDir . '/archives/' . $archive . '.sdb';
+                    $source = $this->directory($id) . '/archive.sdb';
+                    clearstatcache();
+                    $a = is_file($source) ? stat($source) : false;
+                    $b = is_file($target) ? stat($target) : false;
+                    $installed = $config->archive($archive);
+                    foreach ($config->archives as $configured) {
+                        $c = is_file($configured->database) ? stat($configured->database) : false;
+                        // A configured hard link is just as authoritative as the publication path.
+                        if ($c !== false && (($a !== false && $a['dev'] === $c['dev'] && $a['ino'] === $c['ino'])
+                            || ($b !== false && $b['dev'] === $c['dev'] && $b['ino'] === $c['ino']))) {
+                            $installed = $configured;
+                        }
+                    }
+                    if ($installed !== null || ($b !== false && ($a === false || $a['dev'] !== $b['dev'] || $a['ino'] !== $b['ino']))) {
+                        throw new Problem('error.busy', status: 409);
+                    }
+                    if ($b !== false && !unlink($target)) {
+                        throw new Problem('error.path');
                     }
                 }
-                $a = is_file($source) ? stat($source) : false;
-                $b = is_file($target) ? stat($target) : false;
-                if ($installed !== null || ($b !== false && ($a === false || $a['dev'] !== $b['dev'] || $a['ino'] !== $b['ino']))) {
-                    throw new Problem('error.busy', status: 409);
-                }
-                if ($b !== false && !unlink($target)) {
-                    throw new Problem('error.path');
-                }
+                $this->removePayload($id);
+                $state['phase'] = 'discarded';
+                $this->save($id, $state);
+                return ['id' => $id, 'phase' => 'discarded'];
+            } finally {
+                $writer->release();
             }
-            $this->removePayload($id);
-            $state['phase'] = 'discarded';
-            $this->save($id, $state);
-            return ['id' => $id, 'phase' => 'discarded'];
         });
     }
 

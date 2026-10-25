@@ -46,12 +46,11 @@ final class ArchiveImportTest extends TestCase
 
     public function testAbandonedUploadsArePrunedButPublishingIsRetained(): void
     {
-        $config = Config::load($this->path);
-        $files = new ImportFiles($config, $this->now, $this->dir);
+        $files = new ImportFiles($this->path, $this->now, $this->dir);
         $old = $files->upload('old.sdb', 1024)['id'];
         self::assertIsString($old);
         $publishing = $files->begin(['phase' => 'publishing']);
-        $later = new ImportFiles($config, $this->now + 86401, $this->dir);
+        $later = new ImportFiles($this->path, $this->now + 86401, $this->dir);
         $later->upload('new.sdb', 1024);
         self::assertDirectoryDoesNotExist($files->directory($old));
         self::assertDirectoryExists($files->directory($publishing));
@@ -295,9 +294,46 @@ final class ArchiveImportTest extends TestCase
         mkdir($this->dir . '/data/archives');
         $target = $this->dir . '/data/archives/unconnected.sdb';
         link($source, $target);
+        $writer = \WeewxPhp\Tick\Lock::tryAcquire(Config::load($this->path)->settings->lockPath());
+        self::assertNotNull($writer);
+        try {
+            try {
+                $import->files->discard($id);
+                self::fail('Discard must wait for the application writer');
+            } catch (Problem $error) {
+                self::assertSame('error.busy', $error->getMessage());
+            }
+        } finally {
+            $writer->release();
+        }
         $import->files->discard($id);
         self::assertFileDoesNotExist($target);
         self::assertFileDoesNotExist($source);
+    }
+
+    public function testDiscardRechecksConfiguredFileIdentityUnderTheWriterLock(): void
+    {
+        symlink($this->dir . '/data', $this->dir . '/linked-data');
+        file_put_contents($this->path, "data_dir = linked-data\nbackup_enabled = false\n");
+        $import = $this->importer();
+        $id = $import->files->begin(['phase' => 'publishing', 'archive' => 'unconnected']);
+        $staged = $import->files->directory($id) . '/archive.sdb';
+        copy($this->archive(), $staged);
+        mkdir($this->dir . '/data/archives');
+        $target = $this->dir . '/linked-data/archives/unconnected.sdb';
+        link($staged, $target);
+        $read = new ReadModel($this->path);
+        (new Service($this->path, $this->now))->execute('archive.connect', [
+            'revision' => $read->revision, 'archive' => 'connected', 'name' => 'Connected',
+            'database' => realpath($target), 'timezone' => 'Europe/Berlin', 'archive_interval' => '3600',
+        ]);
+        try {
+            $this->expectExceptionMessage('error.busy');
+            $import->files->discard($id);
+        } finally {
+            self::assertFileExists($target);
+            self::assertFileExists($staged);
+        }
     }
 
     public function testDiscardRemovesAnUnfinishedUpload(): void

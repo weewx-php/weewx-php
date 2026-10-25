@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Admin;
@@ -19,7 +21,7 @@ final class ArchiveImport
 
     public function __construct(private readonly string $configPath, private readonly int $now, string $webspace)
     {
-        $this->files = new ImportFiles(Config::load($configPath), $now, $webspace);
+        $this->files = new ImportFiles($configPath, $now, $webspace);
     }
 
     /** @return array<string, mixed> */
