@@ -459,8 +459,14 @@
         "feedback.checked": "Update check complete.",
         "feedback.updated": "Core updated.",
         "error.core_changed": "The release has changed. Check for updates again.",
-        "error.core_update": "Core update failed. Check the server log."
+        "error.core_update": "Core update failed. Check the server log.",
+        "status.rain_input": "Rain calculation",
+        "unit.mib": "MiB",
+        "unit.minute": "min",
+        "label.requirements": "PHP ≥ {php} · API {api}",
+        "error.https_required": "HTTPS required",
+        "error.method_not_allowed": "Method not allowed",
+        "error.forbidden": "Forbidden"
     },
-    "name": "English",
-  "status.rain_input": "Rain calculation"
+    "name": "English"
 }

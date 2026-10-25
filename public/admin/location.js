@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
 "use strict";
 (() => {
   const box = document.querySelector('[data-location-search]');
@@ -19,7 +20,8 @@
       const response = await fetch('?' + new URLSearchParams({page:'archives',lang:document.documentElement.lang}), {
         method:'POST', credentials:'same-origin', body:new URLSearchParams({action:'location.search',csrf:form.elements.csrf.value,query:query.value.trim()})
       });
-      const data = await response.json();
+      let data;
+      try { data = await response.json(); } catch { throw new Error(labels.failed); }
       if (!response.ok) throw new Error(data.error || labels.failed);
       status.textContent = data.results.length ? '' : labels.empty;
       for (const place of data.results) {

@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Admin;
@@ -40,6 +42,19 @@ final class ArchiveImportTest extends TestCase
     protected function tearDown(): void
     {
         TempDir::remove($this->dir);
+    }
+
+    public function testAbandonedUploadsArePrunedButPublishingIsRetained(): void
+    {
+        $config = Config::load($this->path);
+        $files = new ImportFiles($config, $this->now, $this->dir);
+        $old = $files->upload('old.sdb', 1024)['id'];
+        self::assertIsString($old);
+        $publishing = $files->begin(['phase' => 'publishing']);
+        $later = new ImportFiles($config, $this->now + 86401, $this->dir);
+        $later->upload('new.sdb', 1024);
+        self::assertDirectoryDoesNotExist($files->directory($old));
+        self::assertDirectoryExists($files->directory($publishing));
     }
 
     /** @param list<string> $dates */
@@ -185,6 +200,18 @@ final class ArchiveImportTest extends TestCase
         self::assertSame([], $scan['files']);
     }
 
+    public function testSearchExcludesBackupsThroughASymlinkedDataDirectory(): void
+    {
+        $source = $this->archive();
+        mkdir($this->dir . '/data/backups');
+        rename($source, $this->dir . '/data/backups/source.sdb');
+        symlink($this->dir . '/data', $this->dir . '/linked-data');
+        file_put_contents($this->path, "data_dir = linked-data\nbackup_enabled = false\n");
+        $scan = $this->importer()->files->search(null);
+        self::assertTrue($scan['done']);
+        self::assertSame([], $scan['files']);
+    }
+
     public function testChunkResumptionRejectsWrongOffsetsAndPathTraversal(): void
     {
         $import = $this->importer();
@@ -257,6 +284,20 @@ final class ArchiveImportTest extends TestCase
         $import->files->discard($id);
         self::assertFileExists($target);
         self::assertCount(1, Config::load($this->path)->archives);
+    }
+
+    public function testDiscardRemovesOnlyAnUnconfiguredPublicationLink(): void
+    {
+        $import = $this->importer();
+        $id = $import->files->begin(['phase' => 'publishing', 'archive' => 'unconnected']);
+        $source = $import->files->directory($id) . '/archive.sdb';
+        file_put_contents($source, 'staged archive');
+        mkdir($this->dir . '/data/archives');
+        $target = $this->dir . '/data/archives/unconnected.sdb';
+        link($source, $target);
+        $import->files->discard($id);
+        self::assertFileDoesNotExist($target);
+        self::assertFileDoesNotExist($source);
     }
 
     public function testDiscardRemovesAnUnfinishedUpload(): void

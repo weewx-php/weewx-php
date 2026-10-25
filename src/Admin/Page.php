@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Admin;
@@ -60,7 +62,7 @@ final class Page
     {
         $value = $type === 'password' ? '' : $this->value($name, $default);
         return '<label class="control"><span>' . $this->t($label) . '</span><input name="' . self::escape($name) . '" type="' . self::escape($type)
-            . '" value="' . self::escape($value) . '"' . ($required ? ' required' : '') . ($type === 'password' ? ' autocomplete="' . self::escape($autocomplete) . '"' : '') . '></label>';
+            . '" value="' . self::escape($value) . '"' . ($required ? ' required' : '') . ($type === 'number' ? ' step="any"' : '') . ($type === 'password' ? ' autocomplete="' . self::escape($autocomplete) . '"' : '') . '></label>';
     }
 
     /** @param array<string, string> $options Labels are plain text. */
@@ -70,6 +72,7 @@ final class Page
         $description = $hint === '' ? '' : ' aria-describedby="' . self::escape($name . '-hint') . '"';
         $out = '<label class="control"><span>' . $this->t($label) . '</span><select name="' . self::escape($name) . '"' . $description . '>';
         foreach ($options as $key => $text) {
+            $key = (string) $key;
             $out .= '<option value="' . self::escape($key) . '"' . ($value === $key ? ' selected' : '') . '>' . self::escape($text) . '</option>';
         }
         return $out . '</select>' . ($hint === '' ? '' : '<small class="control-hint" id="' . self::escape($name . '-hint') . '">' . $this->t($hint) . '</small>') . '</label>';
@@ -200,7 +203,7 @@ final class Page
             . '<div class="job">' . $this->badge($status['status']) . '<span>' . $this->t('label.last_backup') . ': ' . ($status['completed'] > 0 ? $this->when($status['completed']) : '—') . '</span></div>'
             . '<div class="table-scroll"><table><thead><tr><th>' . $this->t('label.time') . '</th><th>' . $this->t('label.size') . '</th><th></th></tr></thead><tbody>';
         foreach ($backups->files() as $file) {
-            $out .= '<tr><td>' . $this->when($file['created']) . '</td><td>' . $this->language->number(round($file['size'] / 1048576, 1)) . ' MiB</td><td><a class="button small" href="'
+            $out .= '<tr><td>' . $this->when($file['created']) . '</td><td>' . $this->language->number(round($file['size'] / 1048576, 1)) . ' ' . $this->t('unit.mib') . '</td><td><a class="button small" href="'
                 . $this->url('backups', ['download' => $file['name']]) . '">' . $this->t('action.download') . '</a></td></tr>';
         }
         return $out . '</tbody></table></div></section>';
@@ -306,7 +309,7 @@ final class Page
                 $last = null;
                 $status = 'error';
             }
-            $out .= '<tr><td><a class="name" href="' . $this->url('archives', ['archive' => $id]) . '">' . self::escape($archive->name) . '</a></td><td>' . ($status === 'error' ? $this->badge($status) : '<span class="badge ' . ($status === 'setup.ready' ? 'good' : 'neutral') . '">' . $this->t($status) . '</span>') . ($status === 'setup.ready' ? '' : '<a class="setup-next" href="' . $this->url('archives', ['archive' => $id]) . '#archive-setup">' . $this->t('action.configure_connection') . ' →</a>') . '</td><td>' . (string) ($archive->interval($this->read->config->settings) / 60) . ' min</td><td>' . $this->when($last, $archive) . ($status === 'setup.ready' ? '<div class="record-freshness">' . $this->freshnessBadge($last, max(900, 3 * $archive->interval($this->read->config->settings))) . '</div>' : '') . '</td></tr>';
+            $out .= '<tr><td><a class="name" href="' . $this->url('archives', ['archive' => $id]) . '">' . self::escape($archive->name) . '</a></td><td>' . ($status === 'error' ? $this->badge($status) : '<span class="badge ' . ($status === 'setup.ready' ? 'good' : 'neutral') . '">' . $this->t($status) . '</span>') . ($status === 'setup.ready' ? '' : '<a class="setup-next" href="' . $this->url('archives', ['archive' => $id]) . '#archive-setup">' . $this->t('action.configure_connection') . ' →</a>') . '</td><td>' . (string) ($archive->interval($this->read->config->settings) / 60) . ' ' . $this->t('unit.minute') . '</td><td>' . $this->when($last, $archive) . ($status === 'setup.ready' ? '<div class="record-freshness">' . $this->freshnessBadge($last, max(900, 3 * $archive->interval($this->read->config->settings))) . '</div>' : '') . '</td></tr>';
         }
         return $out . '</tbody></table></div>' . ($this->read->config->archives === [] ? '<div class="empty">' . $this->t('status.no_archives') . '</div>' : '');
     }
@@ -412,6 +415,7 @@ final class Page
         foreach (['uploading', 'searching', 'checking', 'repairing', 'ready', 'complete', 'no_files', 'no_zones', 'zones', 'choose_zone', 'resume', 'resume_select', 'pause', 'failed', 'limited', 'paused', 'pausing', 'discarded', 'discarding', 'all_zones_shown'] as $label) {
             $labels[$label] = $this->language->text('import.' . $label);
         }
+        $labels['mib'] = $this->language->text('unit.mib');
         $out .= '<section class="panel archive-import" data-archive-import data-csrf="' . self::escape($this->csrf) . '" data-labels="' . self::escape(json_encode($labels, JSON_THROW_ON_ERROR)) . '"><h2>' . $this->t('action.connect_archive') . '</h2>'
             . '<div class="import-sources"><label class="button import-upload">' . $this->t('action.upload_archive') . '<input type="file" accept=".sdb,.db,.sqlite,.sqlite3" data-import-file></label>'
             . '<button type="button" data-import-search>' . $this->t('action.search_archives') . '</button></div>'
@@ -918,7 +922,7 @@ final class Page
                 $body .= '<div><dt>' . $this->t($label) . '</dt><dd><code>' . self::escape($value) . '</code></dd></div>';
             }
             if ($protocol === 'Wunderground') {
-                $body .= '<div><dt>PASSWORD</dt><dd><code>' . self::escape($keys['wunderground']) . '</code></dd></div>';
+                $body .= '<div><dt>' . $this->t('label.password') . '</dt><dd><code>' . self::escape($keys['wunderground']) . '</code></dd></div>';
             }
             $body .= '</dl><code class="credential">' . self::escape($url . $suffix) . '</code></section>';
         }

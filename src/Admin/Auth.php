@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Admin;
@@ -56,8 +58,8 @@ final class Auth
                 return ['token' => $token, 'csrf' => Sqlite::text($row['csrf']), 'authenticated' => $row['authenticated'] === 1];
             }
         }
-        if ((int) Sqlite::text($this->db->scalar('SELECT COUNT(*) FROM admin_session')) >= 2000) {
-            throw new Problem('error.busy', status: 429);
+        if ((int) Sqlite::text($this->db->scalar('SELECT COUNT(*) FROM admin_session WHERE authenticated = 0')) >= 2000) {
+            $this->db->exec('DELETE FROM admin_session WHERE token IN (SELECT token FROM admin_session WHERE authenticated = 0 ORDER BY expires LIMIT 100)');
         }
         return $this->create($now, false);
     }
@@ -84,19 +86,21 @@ final class Auth
         if (strlen($password) > 72 || str_contains($password, "\0")) {
             throw new Problem('error.login', 'password', 403);
         }
-        $bucket = hash('sha256', $peer);
+        $bucket = hash('sha256', self::peerBucket($peer));
         $this->db->transaction(function () use ($bucket, $now): void {
             $this->db->exec('DELETE FROM admin_login WHERE window < ?', [$now - 900]);
-            foreach ([$bucket, '*'] as $key) {
-                $row = $this->db->one('SELECT failures FROM admin_login WHERE peer = ?', [$key]);
-                if ($row !== null && (int) Sqlite::text($row['failures']) >= ($key === '*' ? 50 : 5)) {
-                    throw new Problem('error.rate_limit', status: 429);
-                }
-                $this->db->exec('INSERT INTO admin_login(peer, window, failures) VALUES(?, ?, 1) ON CONFLICT(peer) DO UPDATE SET failures = failures + 1', [$key, $now]);
+            $row = $this->db->one('SELECT failures FROM admin_login WHERE peer = ?', [$bucket]);
+            if ($row !== null && (int) Sqlite::text($row['failures']) >= 5) {
+                throw new Problem('error.rate_limit', status: 429);
             }
         });
+        $failures = (int) Sqlite::text($this->db->scalar('SELECT COALESCE(SUM(failures), 0) FROM admin_login'));
+        if ($failures >= 50) {
+            usleep(min(250000, ($failures - 49) * 5000));
+        }
         $hash = $this->db->scalar('SELECT password FROM admin_account WHERE id = 1');
         if (!is_string($hash) || !password_verify($password, $hash)) {
+            $this->db->exec('INSERT INTO admin_login(peer, window, failures) VALUES(?, ?, 1) ON CONFLICT(peer) DO UPDATE SET failures = failures + 1', [$bucket, $now]);
             $this->audit('login.failed', $now);
             throw new Problem('error.login', 'password', 403);
         }
@@ -106,6 +110,15 @@ final class Auth
             $this->audit('login.success', $now);
             return $this->create($now, true);
         });
+    }
+
+    private static function peerBucket(string $peer): string
+    {
+        $packed = @inet_pton($peer);
+        if ($packed !== false && strlen($packed) === 16) {
+            return bin2hex(substr($packed, 0, 8)) . '/64';
+        }
+        return $peer;
     }
 
     public static function csrf(string $expected, string $provided): void

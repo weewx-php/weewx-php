@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Admin;
@@ -91,6 +93,50 @@ final class AdminTest extends TestCase
             self::assertSame('ok', (new Tick($runtime))->run('test')->status);
         } finally {
             $runtime->close();
+        }
+    }
+
+    public function testCookielessRequestsCannotExhaustLoginSessions(): void
+    {
+        $settings = Config::load($this->path)->settings;
+        $auth = new Auth($settings);
+        $auth->setPassword('correct-password', self::NOW);
+        $session = $auth->session(null, self::NOW);
+        $signedIn = $auth->login($session['token'], $session['csrf'], 'correct-password', '::1', self::NOW);
+        $db = Changes::store($settings);
+        $db->exec("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<2000) INSERT INTO admin_session SELECT printf('%064d',i), 'csrf', ?, 0 FROM n", [self::NOW + 900]);
+        $db->close();
+        self::assertFalse($auth->session(null, self::NOW)['authenticated']);
+        self::assertTrue($auth->session($signedIn['token'], self::NOW)['authenticated']);
+        self::assertSame((new Translator())->text('status.rain_input'), 'Rain calculation');
+        $auth->close();
+    }
+
+    public function testGlobalFailuresDelayLoginAndIpv6AttemptsShareASubnet(): void
+    {
+        $settings = Config::load($this->path)->settings;
+        $auth = new Auth($settings);
+        $auth->setPassword('correct-password', self::NOW);
+        $session = $auth->session(null, self::NOW);
+        $db = Changes::store($settings);
+        $db->exec('INSERT INTO admin_login VALUES (?, ?, 50)', ['*', self::NOW]);
+        $db->close();
+        $signedIn = $auth->login($session['token'], $session['csrf'], 'correct-password', '192.0.2.1', self::NOW);
+        self::assertTrue($signedIn['authenticated']);
+        $session = $auth->session(null, self::NOW);
+        try {
+            for ($i = 1; $i <= 5; ++$i) {
+                try {
+                    $auth->login($session['token'], $session['csrf'], 'wrong', '2001:db8::' . $i, self::NOW);
+                    self::fail('A wrong password must fail');
+                } catch (Problem $error) {
+                    self::assertSame('error.login', $error->getMessage());
+                }
+            }
+            $this->expectExceptionMessage('error.rate_limit');
+            $auth->login($session['token'], $session['csrf'], 'correct-password', '2001:db8::6', self::NOW);
+        } finally {
+            $auth->close();
         }
     }
 

@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Admin;
@@ -28,6 +30,7 @@ final class ImportFiles
     /** @param array<string, mixed> $state */
     public function begin(array $state): string
     {
+        $this->prune();
         $id = bin2hex(random_bytes(16));
         if (!mkdir($this->directory($id), 0700)) {
             throw new Problem('error.path');
@@ -83,7 +86,23 @@ final class ImportFiles
         return $this->locked($id, function () use ($id): array {
             $state = $this->read($id);
             if (($state['phase'] ?? '') === 'publishing') {
-                throw new Problem('error.busy', status: 409);
+                $archive = Input::id(Input::text($state, 'archive'));
+                $target = $this->config->settings->dataDir . '/archives/' . $archive . '.sdb';
+                $source = $this->directory($id) . '/archive.sdb';
+                $installed = $this->config->archive($archive);
+                foreach ($this->config->archives as $configured) {
+                    if (DatabasePath::key($configured->database) === DatabasePath::key($target)) {
+                        $installed = $configured;
+                    }
+                }
+                $a = is_file($source) ? stat($source) : false;
+                $b = is_file($target) ? stat($target) : false;
+                if ($installed !== null || ($b !== false && ($a === false || $a['dev'] !== $b['dev'] || $a['ino'] !== $b['ino']))) {
+                    throw new Problem('error.busy', status: 409);
+                }
+                if ($b !== false && !unlink($target)) {
+                    throw new Problem('error.path');
+                }
             }
             $this->removePayload($id);
             $state['phase'] = 'discarded';
@@ -221,6 +240,7 @@ final class ImportFiles
             $root = Input::text($state, 'root');
             $offset = self::integer($state['offset'] ?? null);
             $linked = $this->linked();
+            $backup = realpath($this->config->settings->dataDir . '/backups');
             $limited = ($state['limited'] ?? false) === true;
             $started = microtime(true);
             $processed = 0;
@@ -243,7 +263,7 @@ final class ImportFiles
                         if ($path !== false && str_starts_with(DatabasePath::key($path), rtrim(DatabasePath::key($root), '/') . '/')) {
                             if ($entry->isDir()) {
                                 if (!in_array($entry->getFilename(), ['.git', 'node_modules', 'vendor', '.imports', 'logs', '.cache'], true)
-                                    && DatabasePath::key($path) !== DatabasePath::key($this->config->settings->dataDir . '/backups')
+                                    && DatabasePath::key($path) !== DatabasePath::key($backup === false ? $this->config->settings->dataDir . '/backups' : $backup)
                                     && !in_array($path, $visited, true) && !in_array($path, $queue, true)) {
                                     if (count($visited) + count($queue) < 20000) {
                                         $queue[] = $path;
@@ -274,7 +294,7 @@ final class ImportFiles
                 }
             }
             $state['queue'] = $queue;
-            $state['visited'] = $visited;
+            $state['visited'] = $queue === [] ? [] : $visited;
             $state['offset'] = $offset;
             $state['found'] = $found;
             if (strlen(json_encode($state, JSON_THROW_ON_ERROR)) > 3145728) {
@@ -321,10 +341,52 @@ final class ImportFiles
         try {
             // Include committed WAL data without touching the source database or its configuration.
             $db->backup($this->directory($id) . '/archive.sdb');
+        } catch (\Throwable $error) {
+            $this->removePayload($id);
+            throw $error;
         } finally {
             $db->close();
         }
+        // Keep only the selected copy once the search has served its purpose.
+        $this->locked($search, function () use ($search): array {
+            $this->delete($search);
+            return [];
+        });
         return ['id' => $id];
+    }
+
+    private function prune(): void
+    {
+        $directories = glob($this->root . '/*', GLOB_ONLYDIR);
+        foreach ($directories === false ? [] : $directories as $directory) {
+            $id = basename($directory);
+            if (preg_match('/^[a-f0-9]{32}$/D', $id) !== 1 || is_link($directory)) {
+                continue;
+            }
+            try {
+                $this->locked($id, function () use ($id): array {
+                    $state = $this->read($id);
+                    if (($state['phase'] ?? '') !== 'publishing' && is_int($state['updated'] ?? null) && $state['updated'] < $this->now - 86400) {
+                        $this->delete($id);
+                    }
+                    return [];
+                });
+            } catch (Problem) {
+                // An active import owns its staging directory until its next request.
+            }
+        }
+    }
+
+    private function delete(string $id): void
+    {
+        $this->removePayload($id);
+        foreach (['state.json', 'state.json.tmp', 'lock'] as $name) {
+            $path = $this->directory($id) . '/' . $name;
+            if (is_file($path)) {
+                unlink($path);
+            }
+        }
+        rmdir($this->directory($id));
     }
 
     /** @return list<string> */

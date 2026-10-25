@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Admin;
@@ -70,7 +72,7 @@ final class ExtensionPage
             } elseif ($available === null) {
                 $out .= '<p class="extension-note">' . $this->t('extension.unlisted') . '</p>';
             } elseif (!$available->compatible()) {
-                $out .= '<p class="extension-note">' . $this->t('error.extension_incompatible') . ' PHP ≥ ' . Page::escape($available->php) . ' · API ' . $available->api . '</p>';
+                $out .= '<p class="extension-note">' . $this->t('error.extension_incompatible') . ' ' . Page::escape($this->language->text('label.requirements', ['php' => $available->php, 'api' => $available->api])) . '</p>';
             }
             $out .= '<div class="extension-actions">';
             if ($installed !== null && $installed->settings !== null) {
