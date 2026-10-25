@@ -14,7 +14,7 @@ use WeewxPhp\Upload\Rejected;
  */
 final class StreamSocketFactory implements SocketFactory
 {
-    public function open(string $host, int $port, bool $tls, bool $verify, int $timeout): Connection
+    public function open(string $host, int $port, bool $tls, bool $verify, int|float $timeout): Connection
     {
         $deadline = (hrtime(true) / 1_000_000_000) + $timeout;
         $address = sprintf('%s://%s:%d', $tls ? 'tls' : 'tcp', $host, $port);
@@ -37,7 +37,6 @@ final class StreamSocketFactory implements SocketFactory
                 permanent: Dns::missing($reason),
             );
         }
-        stream_set_timeout($stream, $timeout);
         return new StreamConnection($stream, sprintf('%s:%d', $host, $port), $deadline);
     }
 }

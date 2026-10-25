@@ -19,6 +19,18 @@ use WeewxPhp\Weewx\Units;
 
 final class CwopTest extends TestCase
 {
+    public function testOneSecondTimeoutStillConnectsAndUploads(): void
+    {
+        $sockets = (new FakeSocketFactory())->queue(new FakeConnection("# ready\r\n"));
+        $upload = new Cwop(Uploads::config(Kind::Cwop, ['station' => 'DW1234'], timeout: 1), 48.0, 11.0, $sockets);
+
+        $posted = $upload->post([Uploads::metricRecord()]);
+        self::assertSame(1, $posted->sent);
+        self::assertCount(1, $sockets->opened);
+        self::assertGreaterThan(0, $sockets->opened[0]['timeout']);
+        self::assertLessThanOrEqual(1, $sockets->opened[0]['timeout']);
+    }
+
     public function testThePacketIsWeewxsCharacterForCharacter(): void
     {
         $upload = $this->cwop();

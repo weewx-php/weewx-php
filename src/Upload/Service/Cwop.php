@@ -257,10 +257,10 @@ final class Cwop implements Upload
         throw new Rejected('no CWOP server answered: ' . $last);
     }
 
-    private function remaining(float $deadline): int
+    private function remaining(float $deadline): float
     {
-        $left = (int) floor($deadline - (hrtime(true) / 1_000_000_000));
-        if ($left < 1) {
+        $left = $deadline - (hrtime(true) / 1_000_000_000);
+        if ($left <= 0) {
             throw new Rejected('CWOP deadline reached');
         }
         return $left;
