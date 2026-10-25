@@ -361,7 +361,8 @@ final class Archiver
         $step = (float) Units::convert(0.001, 'inch', Units::standardUnit($units, 'group_rain'));
         $resolutions = [];
         foreach (RainCounter::FIELDS as $field) {
-            $resolutions[$field] = $step * abs($this->config->calibrate[$packet->sender][$field]->scale ?? 1.0);
+            $calibration = $this->config->calibrate[$packet->sender][$field] ?? null;
+            $resolutions[$field] = $step * abs($calibration?->scale ?? 1.0);
         }
         return $resolutions;
     }
