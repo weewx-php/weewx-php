@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Config;
@@ -19,6 +21,12 @@ use WeewxPhp\Weewx\UnitSystem;
 final class ConfigTest extends TestCase
 {
     private const BASE = '/srv/weewx-php';
+
+    public function testTickTokenRejectsTheExamplePlaceholder(): void
+    {
+        $this->expectException(ConfigError::class);
+        ConfigReader::read(ConfFile::parse("tick_token = change-me\n"), self::BASE);
+    }
 
     private static function example(): string
     {

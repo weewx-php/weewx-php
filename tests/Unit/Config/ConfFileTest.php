@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Config;
@@ -11,6 +13,23 @@ use WeewxPhp\Tests\Support\TempDir;
 
 final class ConfFileTest extends TestCase
 {
+    public function testBomNumericNamesAndQuotedKeysRoundTrip(): void
+    {
+        $file = ConfFile::parse("\xEF\xBB\xBFdata_dir = data\n[Stations]\n[[2024]]\nname = Roof\n[Archives]\n[[2025]]\nprimary = 2024\n[Uploads]\n[[2026]]\nkind = wunderground\nstation = 12345\npassword = key\n");
+        $file->root()->set('a=b', 'value');
+        $file->root()->set('[key', 'other');
+        $text = $file->toString();
+        $read = ConfFile::parse($text);
+        self::assertSame('data', $read->root()->value('data_dir')->string());
+        self::assertSame('value', $read->root()->value('a=b')->string());
+        self::assertSame('other', $read->root()->value('[key')->string());
+        $config = \WeewxPhp\Config\ConfigReader::read($read, '/tmp');
+        self::assertSame('2024', array_values($config->stations)[0]->id);
+        self::assertSame('2025', array_values($config->archives)[0]->id);
+        self::assertSame('2025', array_values($config->uploads)[0]->archive);
+        self::assertSame('12345', array_values($config->uploads)[0]->text('station'));
+    }
+
     public function testNewParentValuesRemainInTheirSectionWhenWritten(): void
     {
         $file = ConfFile::parse("[Archives]\n    [[garden]]\n        [[[fields]]]\n            [[[[sensor]]]]\n                outTemp = extraTemp1\n");

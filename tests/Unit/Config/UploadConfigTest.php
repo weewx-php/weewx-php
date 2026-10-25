@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Config;
@@ -14,6 +16,18 @@ use WeewxPhp\Upload\Trigger;
 final class UploadConfigTest extends TestCase
 {
     private const HEAD = "[Stations]\n[[ecowitt]]\n[Archives]\n[[kirchdorf]]\nprimary = ecowitt\n";
+
+    public function testMqttPortAndKeepaliveMustFitTheWireFormat(): void
+    {
+        foreach (['port', 'keepalive'] as $key) {
+            try {
+                ConfigReader::read(ConfFile::parse(self::HEAD . "[Uploads]\n[[mqtt]]\nkind = mqtt\nhost = localhost\n" . $key . " = 70000\n"), '/tmp');
+                self::fail('Out-of-range MQTT option was accepted');
+            } catch (ConfigError $error) {
+                self::assertStringContainsString($key, $error->getMessage());
+            }
+        }
+    }
 
     public function testReadsEveryKindWithItsOwnDefaults(): void
     {

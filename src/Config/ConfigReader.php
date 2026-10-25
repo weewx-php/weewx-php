@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Config;
@@ -87,6 +89,7 @@ final class ConfigReader
     {
         $result = [];
         foreach ($section?->sections() ?? [] as $name => $one) {
+            $name = (string) $name;
             $kind = $one->value('kind')->string();
             \WeewxPhp\Measurement\Catalog::validate($name, $kind);
             if (in_array(strtolower($name), array_map('strtolower', array_keys($result)), true)) {
@@ -103,8 +106,10 @@ final class ConfigReader
     {
         $result = [];
         foreach ($section?->sections() ?? [] as $station => $fields) {
+            $station = (string) $station;
             $used = [];
             foreach ($fields->sections() as $native => $one) {
+                $native = (string) $native;
                 if (!\WeewxPhp\Ingest\Parser::measurementKey($native)) {
                     throw new ConfigError('Invalid source field');
                 }
@@ -197,6 +202,9 @@ final class ConfigReader
         if ($backupRetention < 1 || $backupRetention > 3650) {
             throw ConfigError::at('backup_retention_days', 'must be between 1 and 3650');
         }
+        if ($token !== null && in_array(strtolower($token), ['change-me', 'changeme'], true)) {
+            throw ConfigError::at('tick_token', 'replace the placeholder with a random token');
+        }
         if ($token === '') {
             $token = null;
         }
@@ -230,6 +238,7 @@ final class ConfigReader
         }
         $stations = [];
         foreach ($section->sections() as $id => $one) {
+            $id = (string) $id;
             self::requireId($one, $id);
             $this->warnUnknownKeys($one, self::STATION_KEYS, []);
             $expected = $one->optional('expected_interval')?->duration();
@@ -263,6 +272,7 @@ final class ConfigReader
         }
         $archives = [];
         foreach ($section->sections() as $id => $one) {
+            $id = (string) $id;
             $archives[$id] = $this->archive($id, $one, $settings, $stations);
         }
         foreach ($section->values() as $key => $value) {
@@ -347,6 +357,7 @@ final class ConfigReader
         }
         $indoor = [];
         foreach ($section->sections() as $sender => $member) {
+            $sender = (string) $sender;
             $this->requireStation($stations, $sender, $member->path());
             $this->warnUnknownKeys($member, ['indoor'], []);
             $indoor[$sender] = $member->optional('indoor')?->bool() ?? true;
@@ -363,6 +374,7 @@ final class ConfigReader
         }
         $columns = [];
         foreach ($section->values() as $name => $value) {
+            $name = (string) $name;
             self::requireColumnName($value->path(), $name);
             try {
                 $columns[$name] = ColumnType::fromName($value->string());
@@ -386,8 +398,10 @@ final class ConfigReader
         }
         $fields = [];
         foreach ($section->sections() as $sender => $placements) {
+            $sender = (string) $sender;
             $this->requireStation($stations, $sender, $placements->path());
             foreach ($placements->values() as $raw => $value) {
+                $raw = (string) $raw;
                 $target = $value->string();
                 if ($target !== '-') {
                     self::requireColumnName($value->path(), $target);
@@ -410,6 +424,7 @@ final class ConfigReader
         }
         $extractors = [];
         foreach ($section->values() as $obsType => $value) {
+            $obsType = (string) $obsType;
             $extractors[$obsType] = Extractor::from($value->oneOf(array_column(Extractor::cases(), 'value')));
         }
         return $extractors;
@@ -424,6 +439,7 @@ final class ConfigReader
         }
         $calculate = [];
         foreach ($section->values() as $obsType => $value) {
+            $obsType = (string) $obsType;
             $how = How::from($value->oneOf(array_column(How::cases(), 'value')));
             if (!Derivable::knows($obsType)) {
                 $this->warnings[] = sprintf('%s: nothing here can derive %s; ignored', $value->path(), $obsType);
@@ -443,6 +459,7 @@ final class ConfigReader
         }
         $rules = [];
         foreach ($section->values() as $obsType => $value) {
+            $obsType = (string) $obsType;
             if ($obsType === 'unit_system') {
                 continue;
             }
@@ -484,8 +501,10 @@ final class ConfigReader
         }
         $calibrate = [];
         foreach ($section->sections() as $sender => $corrections) {
+            $sender = (string) $sender;
             $this->requireStation($stations, $sender, $corrections->path());
             foreach ($corrections->values() as $obsType => $value) {
+                $obsType = (string) $obsType;
                 $parts = $value->list();
                 if (count($parts) < 1 || count($parts) > 2) {
                     throw ConfigError::at($value->path(), 'expected an offset and optionally a scale');
@@ -515,6 +534,7 @@ final class ConfigReader
         }
         $uploads = [];
         foreach ($section->sections() as $id => $one) {
+            $id = (string) $id;
             self::requireId($one, $id);
             $kindValue = $one->optional('kind');
             if ($kindValue === null) {
@@ -574,7 +594,7 @@ final class ConfigReader
         $named = $one->optional('archive')?->string();
         if ($named === null) {
             if (count($archives) === 1) {
-                return array_key_first($archives) ?? '';
+                return strval(array_key_first($archives) ?? '');
             }
             throw ConfigError::at($one->pathOf('archive'), sprintf(
                 'is needed: there are %d archives, and a registration is for one place',
@@ -614,6 +634,9 @@ final class ConfigReader
                 OptionSpec::CHOICE => $value->oneOf($spec->choices),
                 default => $value->string(),
             };
+            if (in_array($key, ['port', 'keepalive'], true) && is_int($options[$key]) && ($options[$key] < ($key === 'port' ? 1 : 0) || $options[$key] > 65535)) {
+                throw ConfigError::at($value->path(), 'must fit an unsigned 16-bit value');
+            }
             if ($spec->required && $options[$key] === '') {
                 throw ConfigError::at($value->path(), 'must not be empty');
             }

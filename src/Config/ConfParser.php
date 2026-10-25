@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Config;
@@ -31,6 +33,9 @@ final class ConfParser
 
     public static function parse(string $text): ConfFile
     {
+        if (str_starts_with($text, "\xEF\xBB\xBF")) {
+            $text = substr($text, 3);
+        }
         $newline = str_contains($text, "\r\n") ? "\r\n" : "\n";
         $lines = preg_split('/\r\n|\n|\r/', $text);
         if ($lines === false) {

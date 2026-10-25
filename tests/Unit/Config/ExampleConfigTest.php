@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Config;
@@ -18,7 +20,7 @@ final class ExampleConfigTest extends TestCase
 
         self::assertSame([], $config->warnings);
         self::assertSame(300, $config->settings->archiveInterval);
-        self::assertSame('change-me', $config->settings->tickToken);
+        self::assertNull($config->settings->tickToken);
         self::assertSame(['ecowitt_kirchdorf', 'dwd_freising'], array_keys($config->stations));
         self::assertSame(3600, $config->stations['dwd_freising']->expectedInterval);
 
