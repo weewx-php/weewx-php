@@ -40,7 +40,8 @@ final class Receiver
         $now = $this->runtime->clock->now();
         $sender = null;
         try {
-            if (!$store->permit($peer, $now, $config)) {
+            $preauthenticated = $this->preBodyCredential($method, $path, $query, $store);
+            if (!$store->permitPeer($peer, $now, $config, $preauthenticated)) {
                 throw new Rejected('request rate limited', 429);
             }
             [$protocol, $key] = $this->route($path);
@@ -67,6 +68,9 @@ final class Receiver
             // Parse together so duplicate credentials across query and body are rejected.
             $fields = Parser::form($query . ($query !== '' && $body !== '' ? '&' : '') . $body);
             $sender = $store->authenticate($protocol, $fields['PASSKEY'] ?? '', $fields['PASSWORD'] ?? '');
+            if ($sender === null && !$store->permitDiscovery($now, $config)) {
+                throw new Rejected('request rate limited', 429);
+            }
             if (!$store->permitSender($sender, $peer, $now, $config)) {
                 throw new Rejected($sender === null ? 'discovery blocked' : 'sender rate limited', 429);
             }
@@ -116,6 +120,25 @@ final class Receiver
                 // A full/unavailable database cannot persist its own diagnosis.
             }
             return new Response(503, 'unavailable');
+        }
+    }
+
+    private function preBodyCredential(string $method, string $path, string $query, Store $store): bool
+    {
+        try {
+            [$protocol, $key] = $this->route($path);
+            if (!in_array($method, $protocol === Protocol::Ecowitt ? ['POST'] : ['GET', 'POST'], true)) {
+                return false;
+            }
+            if ($protocol === Protocol::Ecowitt) {
+                return $query === '' && $store->ecowittKeyMatches($key);
+            }
+            $fields = Parser::form($query);
+            $identity = $fields['ID'] ?? '';
+            return $identity !== '' && strlen($identity) <= 128 && $store->wundergroundKeyMatches($fields['PASSWORD'] ?? '');
+        } catch (Rejected) {
+            // Admission still charges malformed routes and queries before rejection.
+            return false;
         }
     }
 

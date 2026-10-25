@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Ingest;
@@ -50,6 +52,170 @@ final class ReceiverTest extends TestCase
     {
         $this->runtime->close();
         TempDir::remove($this->dir);
+    }
+
+    public function testRejectedIpRequestsDoNotConsumeTheGlobalDiscoveryAllowance(): void
+    {
+        $store = $this->runtime->ingest();
+        $config = new IngestConfig(requestsPerMinute: 2);
+        for ($i = 0; $i < 25; ++$i) {
+            $store->permit('192.0.2.10', self::NOW, $config);
+        }
+        self::assertTrue($store->permit('192.0.2.11', self::NOW, $config));
+        self::assertTrue($store->permit('2001:db8:1::1', self::NOW, $config));
+        self::assertTrue($store->permit('2001:db8:1::2', self::NOW, $config));
+        self::assertFalse($store->permit('2001:db8:1::3', self::NOW, $config));
+    }
+
+    public function testKnownSenderSurvivesExhaustedGlobalDiscoveryQuota(): void
+    {
+        $password = $this->keys['wunderground'];
+        $this->get($this->wu($password));
+        $config = new IngestConfig(enabled: true, requestsPerMinute: 1);
+        $this->runtime->config = new Config($this->runtime->config->settings, [], [], [], ingest: $config);
+        for ($i = 1; $i <= 10; ++$i) {
+            $this->runtime->ingest()->permit('192.0.2.' . $i, self::NOW, $config);
+        }
+        self::assertFalse($this->runtime->ingest()->permit('192.0.2.20', self::NOW, $config));
+        self::assertSame(200, $this->receiver->handle('GET', self::WU, $this->wu($password), static fn(): string => '', '192.0.2.21', true)->status);
+    }
+
+    public function testMappedIpv4AliasesShareOnlyTheirOwnPeerAllowance(): void
+    {
+        $store = $this->runtime->ingest();
+        $config = new IngestConfig(requestsPerMinute: 2);
+        self::assertTrue($store->permitPeer('192.0.2.1', self::NOW, $config));
+        self::assertTrue($store->permitPeer('::ffff:192.0.2.1', self::NOW, $config));
+        self::assertFalse($store->permitPeer('::ffff:c000:201', self::NOW, $config));
+        self::assertTrue($store->permitPeer('::ffff:c000:202', self::NOW, $config));
+        self::assertTrue($store->permitPeer('::ffff:192.0.2.2', self::NOW, $config));
+        self::assertFalse($store->permitPeer('192.0.2.2', self::NOW, $config));
+        self::assertTrue($store->permitPeer('2001:db8:1::1', self::NOW, $config));
+        self::assertTrue($store->permitPeer('2001:db8:1::2', self::NOW, $config));
+        self::assertFalse($store->permitPeer('2001:db8:1::3', self::NOW, $config));
+    }
+
+    public function testAdoptedSenderFromFreshIpEvictsOnlyExpiredPeers(): void
+    {
+        $password = $this->keys['wunderground'];
+        $this->get($this->wu($password));
+        [$sender] = $this->runtime->ingest()->senders();
+        $this->runtime->ingest()->adopt($sender->id, null, self::NOW);
+        $db = Sqlite::open($this->runtime->config->settings->ingestDbPath(), false, $this->runtime->config->settings->journalMode);
+        try {
+            $db->exec('DELETE FROM ingest_limit');
+            $db->exec("WITH RECURSIVE peers(n) AS (SELECT 0 UNION ALL SELECT n + 1 FROM peers WHERE n < 4095) INSERT INTO ingest_limit (peer, window, requests, failed_window, touched) SELECT printf('198.18.%d.%d', n / 256, n % 256), ? - (n = 0), 1, ?, ? - (n = 1) FROM peers", [intdiv(self::NOW, 60), intdiv(self::NOW, 300), self::NOW]);
+            $send = fn(string $peer): Response => $this->receiver->handle('GET', self::WU, $this->wu($password), static fn(): string => '', $peer, true);
+            self::assertSame(200, $send('203.0.113.1')->status);
+            self::assertNull($db->scalar("SELECT peer FROM ingest_limit WHERE peer = '198.18.0.0'"));
+            self::assertNotNull($db->scalar("SELECT peer FROM ingest_limit WHERE peer = '198.18.0.1'"));
+            self::assertSame(200, $send('203.0.113.2')->status);
+            self::assertNotNull($db->scalar("SELECT peer FROM ingest_limit WHERE peer = '198.18.0.1'"));
+            self::assertNull($db->scalar("SELECT peer FROM ingest_limit WHERE peer = '203.0.113.2'"));
+            self::assertSame(4096, $db->scalar("SELECT COUNT(*) FROM ingest_limit WHERE peer NOT LIKE 'sender:%'"));
+        } finally {
+            $db->close();
+        }
+    }
+
+    public function testPeerChurnPreservesActiveQuotaAndThrottlesUnknownRequests(): void
+    {
+        $config = new IngestConfig(enabled: true, requestsPerMinute: 30);
+        $this->runtime->config = new Config($this->runtime->config->settings, [], [], [], ingest: $config);
+        for ($i = 0; $i < 30; ++$i) {
+            self::assertTrue($this->runtime->ingest()->permitPeer('192.0.2.1', $this->clock->now(), $config));
+        }
+        $this->clock->advance(1);
+        $db = Sqlite::open($this->runtime->config->settings->ingestDbPath(), false, $this->runtime->config->settings->journalMode);
+        try {
+            $this->fillPeerTable($db, 4095);
+            self::assertSame(404, $this->receiver->handle('GET', '/invalid', '', static fn(): string => '', '203.0.113.1', true)->status);
+            $store = $this->runtime->ingest();
+            self::assertSame([false, false], [$store->permitPeer('192.0.2.1', $this->clock->now(), $config), $store->blocked('192.0.2.1', $this->clock->now())]);
+            for ($i = 2; $i <= 30; ++$i) {
+                self::assertSame(405, $this->receiver->handle('DELETE', self::WU, '', static fn(): string => '', '203.0.113.' . $i, true)->status);
+            }
+            self::assertSame(429, $this->receiver->handle('GET', '/invalid', '', static fn(): string => '', '203.0.113.31', true)->status);
+        } finally {
+            $db->close();
+        }
+    }
+
+    public function testPeerChurnKeepsAFutureBlockAfterTheRequestWindowExpires(): void
+    {
+        $config = new IngestConfig(enabled: true, requestsPerMinute: 30);
+        $this->runtime->config = new Config($this->runtime->config->settings, [], [], [], ingest: $config);
+        for ($i = 0; $i < 30; ++$i) {
+            $this->get($this->wu('wrong'));
+        }
+        $this->clock->advance(61);
+        $db = Sqlite::open($this->runtime->config->settings->ingestDbPath(), false, $this->runtime->config->settings->journalMode);
+        try {
+            $this->fillPeerTable($db, 4095);
+            self::assertSame(404, $this->receiver->handle('GET', '/invalid', '', static fn(): string => '', '203.0.113.1', true)->status);
+            self::assertTrue($this->runtime->ingest()->blocked('192.0.2.1', $this->clock->now()));
+        } finally {
+            $db->close();
+        }
+    }
+
+    public function testFullTableAndExhaustedOverflowAllowOnlyPreBodyCredentials(): void
+    {
+        $password = $this->keys['wunderground'];
+        $this->get($this->wu($password));
+        $this->post($this->ecowitt());
+        foreach ($this->runtime->ingest()->senders() as $sender) {
+            $this->runtime->ingest()->adopt($sender->id, null, self::NOW);
+        }
+        $config = new IngestConfig(enabled: true, requestsPerMinute: 2);
+        $this->runtime->config = new Config($this->runtime->config->settings, [], [], [], ingest: $config);
+        $db = Sqlite::open($this->runtime->config->settings->ingestDbPath(), false, $this->runtime->config->settings->journalMode);
+        try {
+            $db->exec('DELETE FROM ingest_limit');
+            $this->fillPeerTable($db, 4096);
+            $store = $this->runtime->ingest();
+            self::assertTrue($store->permitPeer('203.0.113.1', self::NOW, $config));
+            self::assertTrue($store->permitPeer('203.0.113.2', self::NOW, $config));
+            self::assertFalse($store->permitPeer('203.0.113.3', self::NOW, $config));
+            self::assertSame(200, $this->receiver->handle('GET', self::WU, $this->wu($password), static fn(): string => '', '203.0.113.4', true)->status);
+            self::assertSame(200, $this->receiver->handle('POST', '/' . $this->keys['ecowitt'] . '/ecowitt/', '', fn(): string => $this->ecowitt(), '203.0.113.5', true)->status);
+            $read = false;
+            $reply = $this->receiver->handle('POST', self::WU, '', static function () use (&$read): string {
+                $read = true;
+                return '';
+            }, '203.0.113.6', true);
+            self::assertSame([429, false], [$reply->status, $read]);
+        } finally {
+            $db->close();
+        }
+    }
+
+    public function testExhaustedIpDoesNotReadWundergroundPostBodies(): void
+    {
+        $this->runtime->config = new Config($this->runtime->config->settings, [], [], [], ingest: new IngestConfig(enabled: true, requestsPerMinute: 1));
+        $body = $this->wu($this->keys['wunderground']);
+        self::assertSame(200, $this->receiver->handle('POST', self::WU, '', static fn(): string => $body, '192.0.2.50', true)->status);
+        $read = false;
+        $response = $this->receiver->handle('POST', self::WU, '', static function () use (&$read, $body): string {
+            $read = true;
+            return $body;
+        }, '192.0.2.50', true);
+        self::assertFalse($read);
+        self::assertSame(429, $response->status);
+    }
+
+    public function testBookkeepingFailureAfterLiveCommitStillAcknowledgesDelivery(): void
+    {
+        $password = $this->keys['wunderground'];
+        $this->get($this->wu($password));
+        [$sender] = $this->runtime->ingest()->senders();
+        $this->runtime->ingest()->adopt($sender->id, null, self::NOW);
+        $db = Sqlite::open($this->runtime->config->settings->ingestDbPath(), false, $this->runtime->config->settings->journalMode);
+        $db->exec("CREATE TRIGGER fail_diagnostics BEFORE UPDATE ON ingest_diagnostic BEGIN SELECT RAISE(ABORT, 'bookkeeping failure'); END");
+        self::assertSame(200, $this->get($this->wu($password))->status);
+        self::assertTrue($this->receiver->wrote());
+        self::assertSame(1, $this->runtime->live()->count());
+        $db->close();
     }
 
     public function testEcowittDiscoveryDoesNotWriteLiveUntilAdoption(): void
@@ -330,7 +496,7 @@ final class ReceiverTest extends TestCase
         self::assertSame(200, $this->get($this->wu($password))->status);
     }
 
-    public function testSenderLimitsAreSharedAcrossWorkersAndStillRespectOuterLimits(): void
+    public function testSenderLimitsAreSharedAcrossWorkersAndIndependentOfDiscovery(): void
     {
         $password = $this->keys['wunderground'];
         $this->get($this->wu($password));
@@ -354,7 +520,7 @@ final class ReceiverTest extends TestCase
             self::assertSame(429, $send($password)->status);
             self::assertSame(200, $send($otherPassword)->status);
             self::assertSame(429, $send($otherPassword)->status);
-            // The seventh request is blocked by the IP limit before authentication.
+            // The shared IP allowance still bounds work before authentication.
             self::assertSame('request rate limited', $send($otherPassword)->body);
             $this->clock->advance(60);
             self::assertSame(200, $send($password)->status);
@@ -512,6 +678,11 @@ final class ReceiverTest extends TestCase
         $store->prune(self::NOW + 86900);
         self::assertNull($store->sender($sender->id)?->sample);
         self::assertSame(0, count(array_filter($store->fields($sender->id), static fn(array $field): bool => $field['value'] !== null)));
+    }
+
+    private function fillPeerTable(Sqlite $db, int $count): void
+    {
+        $db->exec("WITH RECURSIVE peers(n) AS (SELECT 0 UNION ALL SELECT n + 1 FROM peers WHERE n + 1 < ?) INSERT INTO ingest_limit (peer, window, requests, failed_window, touched) SELECT printf('198.18.%d.%d', n / 256, n % 256), ?, 1, ?, ? FROM peers", [$count, intdiv($this->clock->now(), 60), intdiv($this->clock->now(), 300), $this->clock->now()]);
     }
 
     private function ecowitt(): string

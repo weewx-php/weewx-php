@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Weewx;
@@ -11,6 +13,14 @@ use WeewxPhp\Weewx\Intervals;
 
 final class IntervalsTest extends TestCase
 {
+    public function testMidnightDstTransitionMatchesWeewxArchiveDays(): void
+    {
+        $zone = new DateTimeZone('America/Santiago');
+        $first = self::local('2026-09-06 01:00:00', $zone);
+        self::assertSame($first, Intervals::startOfArchiveDay($first, $zone));
+        self::assertSame(self::local('2026-09-07 00:00:00', $zone), Intervals::endOfDay($first, $zone));
+    }
+
     public function testABoundaryBelongsToTheIntervalThatEndsThere(): void
     {
         self::assertSame(1200, Intervals::stop(1200, 300));

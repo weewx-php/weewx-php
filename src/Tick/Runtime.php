@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tick;
@@ -121,10 +123,10 @@ final class Runtime
         return (new \WeewxPhp\Extension\Registry($this->config))->run($budget, $this->clock->now(), $this->http, $this->log);
     }
 
-    /** HTTP intake never waits on another SQLite writer; failed persistence is not acknowledged. */
+    /** HTTP intake allows brief maintenance writes to finish before refusing a delivery. */
     public function nonBlockingIngest(): void
     {
-        $this->ingestWait = 0;
+        $this->ingestWait = 750;
     }
 
     public function live(): LiveDb

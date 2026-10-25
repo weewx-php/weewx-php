@@ -18,10 +18,11 @@ use WeewxPhp\Weewx\Intervals;
 /** Native credentials, admission and delivery receipts, in the live transaction. */
 final class CollectorStore
 {
+    private const DISCOVERY_RETENTION = 86400;
     public const SCHEMA = <<<'SQL'
         CREATE TABLE IF NOT EXISTS weewx_collector (
             id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
-            enabled INTEGER NOT NULL DEFAULT 1, created INTEGER NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1, created INTEGER NOT NULL, provisioned INTEGER NOT NULL DEFAULT 0,
             last_seen INTEGER, minute INTEGER NOT NULL DEFAULT 0, requests INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS weewx_station (
@@ -50,12 +51,12 @@ final class CollectorStore
     {
         self::label($name);
         return $this->db->transaction(function () use ($name, $now): array {
-            if ((int) Sqlite::text($this->db->scalar('SELECT COUNT(*) FROM weewx_collector')) >= 100) {
+            if ((int) Sqlite::text($this->db->scalar('SELECT COUNT(*) FROM weewx_collector WHERE provisioned = 1 OR EXISTS (SELECT 1 FROM weewx_station s WHERE s.collector = weewx_collector.id AND s.adopted = 1)')) >= 100) {
                 throw new InvalidArgumentException('collector limit reached');
             }
             $id = self::newUuid();
             $token = bin2hex(random_bytes(32));
-            $this->db->exec('INSERT INTO weewx_collector (id, name, token_hash, created) VALUES (?, ?, ?, ?)', [$id, $name, hash('sha256', $token), $now]);
+            $this->db->exec('INSERT INTO weewx_collector (id, name, token_hash, created, provisioned) VALUES (?, ?, ?, ?, 1)', [$id, $name, hash('sha256', $token), $now]);
             return ['id' => $id, 'token' => $token];
         });
     }
@@ -81,9 +82,8 @@ final class CollectorStore
         if ($this->db->one('SELECT id FROM weewx_collector WHERE token_hash = ?', [hash('sha256', $token)]) !== null) {
             throw new Rejected('collector_mismatch', 403);
         }
-        $pending = (int) Sqlite::text($this->db->scalar('SELECT COUNT(*) FROM weewx_collector c WHERE NOT EXISTS (SELECT 1 FROM weewx_station s WHERE s.collector = c.id AND s.adopted = 1)'));
-        $total = (int) Sqlite::text($this->db->scalar('SELECT COUNT(*) FROM weewx_collector'));
-        if ($pending >= $config->ingest->maxPending || $total >= 100) {
+        $pending = (int) Sqlite::text($this->db->scalar('SELECT COUNT(*) FROM weewx_collector c WHERE c.provisioned = 0 AND NOT EXISTS (SELECT 1 FROM weewx_station s WHERE s.collector = c.id AND s.adopted = 1)'));
+        if ($pending >= $config->ingest->maxPending) {
             throw new Rejected('discovery_capacity', 503);
         }
         $this->db->exec('INSERT INTO weewx_collector (id, name, token_hash, created) VALUES (?, ?, ?, ?)', [$collector, $collector, hash('sha256', $token), $now]);
@@ -112,6 +112,24 @@ final class CollectorStore
         } else {
             throw new InvalidArgumentException('invalid station state');
         }
+    }
+
+    public function trusted(string $collector): bool
+    {
+        return $this->db->one('SELECT 1 FROM weewx_collector WHERE id = ? AND (provisioned = 1 OR EXISTS (SELECT 1 FROM weewx_station WHERE collector = ? AND adopted = 1))', [$collector, $collector]) !== null;
+    }
+
+    public function delete(string $collector): void
+    {
+        NativeParser::uuid($collector);
+        $this->db->transaction(function () use ($collector): void {
+            foreach (['weewx_receipt', 'weewx_sensor', 'weewx_station'] as $table) {
+                $this->db->exec('DELETE FROM ' . $table . ' WHERE collector = ?', [$collector]);
+            }
+            if ($this->db->exec('DELETE FROM weewx_collector WHERE id = ?', [$collector]) === 0) {
+                throw new InvalidArgumentException('unknown collector');
+            }
+        });
     }
 
     public function rotate(string $id): string
@@ -228,6 +246,7 @@ final class CollectorStore
     public function receive(string $collector, string $token, array $events, Config $config, int $now): array
     {
         return $this->db->transaction(function () use ($collector, $token, $events, $config, $now): array {
+            $this->prune($now);
             $this->discover($collector, $token, $config, $now);
             $results = [];
             $receiptCount = (int) Sqlite::text($this->db->scalar('SELECT COUNT(*) FROM weewx_receipt'));
@@ -248,7 +267,12 @@ final class CollectorStore
                     $results[] = $result + ['status' => 'rejected', 'reason' => $event->timestamp < $now - $age ? 'too_old' : 'future_timestamp'];
                     continue;
                 }
-                $station = $this->station($collector, $event, $config->ingest->maxPending, $now);
+                try {
+                    $station = $this->station($collector, $event, $config->ingest->maxPending, $now);
+                } catch (Rejected $error) {
+                    $results[] = $result + ['status' => 'rejected', 'reason' => $error->getMessage()];
+                    continue;
+                }
                 $sender = Sqlite::text($station['sender']);
                 $result['sender'] = $sender;
                 if ($station['state'] !== 'adopted') {
@@ -342,6 +366,10 @@ final class CollectorStore
         $this->db->transaction(function () use ($now): void {
             $this->db->exec('DELETE FROM weewx_receipt WHERE received < ?', [$now - NativeParser::RECEIPT_RETENTION]);
             $this->db->exec('UPDATE weewx_station SET sample = NULL WHERE last_seen < ?', [$now - 86400]);
+            $this->db->exec("DELETE FROM weewx_station WHERE adopted = 0 AND state = 'pending' AND first_seen < ?", [$now - self::DISCOVERY_RETENTION]);
+            $this->db->exec('DELETE FROM weewx_collector WHERE provisioned = 0 AND created < ? AND NOT EXISTS (SELECT 1 FROM weewx_station s WHERE s.collector = weewx_collector.id AND (s.adopted = 1 OR s.state != \'pending\'))', [$now - self::DISCOVERY_RETENTION]);
+            $this->db->exec('DELETE FROM weewx_station WHERE collector NOT IN (SELECT id FROM weewx_collector)');
+            $this->db->exec('DELETE FROM weewx_sensor WHERE NOT EXISTS (SELECT 1 FROM weewx_station s WHERE s.collector = weewx_sensor.collector AND s.station = weewx_sensor.station)');
         });
     }
 

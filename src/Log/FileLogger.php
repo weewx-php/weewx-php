@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Log;
@@ -41,12 +43,25 @@ final class FileLogger implements Logger
         if ($level->value < $this->threshold->value) {
             return;
         }
-        $now = $this->clock->now();
         $this->ensureDirectory();
-        $this->rotate($now);
-        $line = sprintf("%s %s %s\n", $this->localTime($now)->format('Y-m-d H:i:s'), $level->label(), $message);
-        if (file_put_contents($this->path, $line, FILE_APPEND | LOCK_EX) === false) {
+        $lock = fopen($this->path . '.lock', 'c');
+        if ($lock === false) {
             throw new RuntimeException(sprintf('Cannot write to log file %s', $this->path));
+        }
+        try {
+            if (!flock($lock, LOCK_EX)) {
+                throw new RuntimeException(sprintf('Cannot write to log file %s', $this->path));
+            }
+            $now = $this->clock->now();
+            clearstatcache(true, $this->path);
+            $this->rotate($now);
+            $line = sprintf("%s %s %s\n", $this->localTime($now)->format('Y-m-d H:i:s'), $level->label(), $message);
+            if (file_put_contents($this->path, $line, FILE_APPEND) === false) {
+                throw new RuntimeException(sprintf('Cannot write to log file %s', $this->path));
+            }
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
         }
     }
 
@@ -70,9 +85,8 @@ final class FileLogger implements Logger
         if ($fileDay === null || $fileDay === $this->localTime($now)->format('Y-m-d')) {
             return;
         }
-        // The rename is atomic. When two processes rotate at once, the second
-        // one finds the file gone, which is the outcome it wanted anyway, so
-        // its failure is not reported.
+        // The separate lock covers the date check, rename and append, including
+        // writers that were waiting when the previous file was rotated.
         if (!is_file($this->path) || !rename($this->path, $this->rotatedName($fileDay))) {
             return;
         }

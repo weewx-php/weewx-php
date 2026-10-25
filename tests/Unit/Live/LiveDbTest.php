@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Live;
@@ -31,6 +33,17 @@ final class LiveDbTest extends TestCase
         TempDir::remove($this->dir);
     }
 
+    public function testClearingAReadGenerationPreservesAConcurrentDelivery(): void
+    {
+        $this->live->add($this->packet(self::T0 + 10, ['outTemp' => 10.0]), ['a'], 300);
+        $generation = $this->live->due(self::T0 + 1000, 0, 'a')[0]['generation'];
+        $this->live->add($this->packet(self::T0 + 20, ['outTemp' => 20.0]), ['a'], 300);
+        $this->live->clearPending(self::T0 + 300, 'a', $generation);
+        self::assertCount(1, $this->live->due(self::T0 + 1000, 0, 'a'));
+        $this->live->clearPending(self::T0 + 300, 'a', $this->live->due(self::T0 + 1000, 0, 'a')[0]['generation']);
+        self::assertSame([], $this->live->due(self::T0 + 1000, 0, 'a'));
+    }
+
     public function testARetryIsNotASecondPacketButANewReadingIs(): void
     {
         $packet = $this->packet(self::T0 + 10, ['outTemp' => 20.5, 'runtime' => 1000], volatile: ['runtime']);
@@ -55,14 +68,14 @@ final class LiveDbTest extends TestCase
         $stop = self::T0 + 300;
 
         self::assertSame([], $this->live->due($stop + 10, 15, 'a'));
-        self::assertSame([['stop' => $stop, 'seconds' => 300]], $this->live->due($stop + 15, 15, 'a'));
-        self::assertSame([['stop' => $stop, 'seconds' => 300]], $this->live->due($stop + 15, 15, 'b'));
+        self::assertSame([['stop' => $stop, 'seconds' => 300, 'generation' => 1]], $this->live->due($stop + 15, 15, 'a'));
+        self::assertSame([['stop' => $stop, 'seconds' => 300, 'generation' => 1]], $this->live->due($stop + 15, 15, 'b'));
         self::assertSame([], $this->live->due($stop + 15, 15, 'c'));
 
         $this->live->clearPending($stop, 'a');
 
         self::assertSame([], $this->live->due($stop + 15, 15, 'a'));
-        self::assertSame([['stop' => $stop, 'seconds' => 300]], $this->live->due($stop + 15, 15, 'b'));
+        self::assertSame([['stop' => $stop, 'seconds' => 300, 'generation' => 1]], $this->live->due($stop + 15, 15, 'b'));
     }
 
     public function testReadsPacketsInTimeOrderWithinTheSpanAndBySender(): void
@@ -104,7 +117,7 @@ final class LiveDbTest extends TestCase
         self::assertSame(1, $this->live->count());
         // The pruned packet's interval went with it; the other one is still due.
         self::assertSame([], $this->live->due(self::T0 + 1800, 0, 'a'));
-        self::assertSame([['stop' => self::T0 + 3600, 'seconds' => 300]], $this->live->due(self::T0 + 3600, 0, 'a'));
+        self::assertSame([['stop' => self::T0 + 3600, 'seconds' => 300, 'generation' => 1]], $this->live->due(self::T0 + 3600, 0, 'a'));
     }
 
     public function testKeepsADialectDescriptionOnceAndHandsItBack(): void
@@ -113,10 +126,11 @@ final class LiveDbTest extends TestCase
         $this->live->add($this->packet(self::T0 + 1, ['tempf' => 70.0], dialect: 'ecowitt', mapping: $mapping), ['a'], 300);
         $this->live->add($this->packet(self::T0 + 2, ['tempf' => 71.0], dialect: 'ecowitt', mapping: $mapping), ['a'], 300);
 
+        $this->live->prune(self::T0 + 2);
         $packets = iterator_to_array($this->live->packets(self::T0, self::T0 + 300), false);
         self::assertSame('ecowitt', $packets[0]->dialect);
         // Stored in canonical, sorted form; the content is what matters.
-        self::assertEquals($mapping, $packets[1]->mapping);
+        self::assertEquals($mapping, $packets[0]->mapping);
 
         $this->live->setMeta(LiveDb::ARCHIVES_KEY, 'a,b');
         self::assertSame('a,b', $this->live->getMeta(LiveDb::ARCHIVES_KEY));

@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Archive;
@@ -16,10 +18,13 @@ use WeewxPhp\State\StateDb;
 use WeewxPhp\Weewx\Accum;
 use WeewxPhp\Weewx\AccumError;
 use WeewxPhp\Weewx\Intervals;
+use WeewxPhp\Weewx\Merger;
 use WeewxPhp\Weewx\Policy;
+use WeewxPhp\Weewx\ScalarStats;
 use WeewxPhp\Weewx\SchemaError;
 use WeewxPhp\Weewx\Units;
 use WeewxPhp\Weewx\UnitSystem;
+use WeewxPhp\Weewx\VecStats;
 
 /**
  * Turns the journal's packets into archive records and daily summaries:
@@ -422,12 +427,11 @@ final class Archiver
     // -- writing ----------------------------------------------------------
 
     /**
-     * Write one built interval, then let its LOOP packets sharpen the day.
-     * The record goes in first and carries the sums; the accumulator
-     * afterwards touches only the highs and lows. Returns false when the
+     * Write one built interval with LOOP extremes preceding record statistics,
+     * as WeeWX does. Returns false when the
      * record was already there and `replace` is not set.
      */
-    public function store(Built $built, bool $replace = false): bool
+    public function store(Built $built, bool $replace = false, bool $updateDaily = true): bool
     {
         $from = $built->stop - $built->seconds;
         foreach ($built->rainEvidence as $evidence) {
@@ -435,14 +439,23 @@ final class Archiver
         }
         $this->changes?->before($from, $built->stop);
         try {
-            $written = $this->archive->transaction(function () use ($built, $replace): bool {
-                if (!$this->archive->addRecord($built->record, $replace)) {
+            $written = $this->archive->transaction(function () use ($built, $replace, $updateDaily): bool {
+                $old = $this->archive->record($built->stop);
+                if ($old !== null && !$replace) {
                     return false;
                 }
-                $this->archive->storeRainEvidence($built);
-                if ($this->settings->loopHilo && $built->packets > 0) {
-                    $this->sharpenDay($built);
+                if (!$updateDaily) {
+                    $this->archive->addRecord($built->record, $replace, false);
+                } elseif ($old !== null) {
+                    $this->archive->addRecord($built->record, true, false);
+                    $this->replaceIntervalDay($built, $old, $built->record + $old);
+                } else {
+                    if ($this->settings->loopHilo && $built->packets > 0) {
+                        $this->sharpenDay($built);
+                    }
+                    $this->archive->addRecord($built->record);
                 }
+                $this->archive->storeRainEvidence($built);
                 return true;
             });
             $this->sayHomeless();
@@ -462,13 +475,28 @@ final class Archiver
         $sod = Intervals::startOfArchiveDay($built->stop, $this->config->timezone);
         $day = $this->archive->loadDay($sod, $built->accumulator->unitSystem());
         try {
-            $day->mergeHilo($built->accumulator);
+            $this->mergeLoopHilo($day, $built->accumulator);
         } catch (AccumError $error) {
             // An interval that straddles midnight: WeeWX refuses it too.
             $this->log->warning(sprintf('%s: the interval ending %d does not sharpen its day: %s', $this->config->id, $built->stop, $error->getMessage()));
             return;
         }
         $this->archive->storeDay($sod, $day, null);
+    }
+
+    private function mergeLoopHilo(Accum $day, Accum $loop): void
+    {
+        // A retained fragment cannot reproduce an interval mean. Avg-policy
+        // extrema come from archive records; packet min/max and vector gusts survive.
+        $hilo = new Accum($loop->start(), $loop->stop(), $loop->unitSystem(), $this->policy);
+        foreach ($loop->types() as $type) {
+            if ($this->policy->of($type)->merger === Merger::Avg) {
+                continue;
+            }
+            $hilo->setStats($type);
+            $hilo->get($type)->mergeHilo($loop->get($type));
+        }
+        $day->mergeHilo($hilo);
     }
 
     /**
@@ -508,7 +536,7 @@ final class Archiver
     public function processDue(int $now, Budget $budget, bool $replace = false, int $minStop = 0): int
     {
         $done = 0;
-        foreach ($this->live->due($now, $this->settings->archiveDelay, $this->config->id, $minStop) as ['stop' => $stop, 'seconds' => $seconds]) {
+        foreach ($this->live->due($now, $this->settings->archiveDelay, $this->config->id, $minStop) as ['stop' => $stop, 'seconds' => $seconds, 'generation' => $generation]) {
             if (!$budget->allows()) {
                 // The mark stays; the next tick takes the interval up.
                 break;
@@ -516,15 +544,15 @@ final class Archiver
             $grid = $this->config->interval($this->settings);
             if ($seconds !== $grid || $stop % $grid !== 0) {
                 // Old external producers may still mark their global grid.
-                $this->live->clearPending($stop, $this->config->id);
+                $this->live->clearPending($stop, $this->config->id, $generation);
                 $this->live->markPending($stop, $grid, [$this->config->id]);
                 continue;
             }
             $existing = $this->archive->exists($stop);
             $this->preserveHardware($stop - $seconds, $stop);
-            if ($existing && !$replace) {
+            if ($existing && (!$replace || !$this->journalCovers($stop, $seconds))) {
                 $this->log->debug(sprintf('%s: interval ending %d is archived already; a late packet is left alone', $this->config->id, $stop));
-                $this->live->clearPending($stop, $this->config->id);
+                $this->live->clearPending($stop, $this->config->id, $generation);
                 continue;
             }
             $built = $this->build($stop, $seconds);
@@ -532,7 +560,7 @@ final class Archiver
                 ++$done;
                 $budget->spent();
             }
-            $this->live->clearPending($stop, $this->config->id);
+            $this->live->clearPending($stop, $this->config->id, $generation);
         }
         return $done;
     }
@@ -552,14 +580,15 @@ final class Archiver
             if ($stop + $this->settings->archiveDelay > $now) {
                 break;
             }
+            $generation = $this->live->pendingGeneration($stop, $this->config->id);
             $this->preserveHardware($job['cursor'], $stop);
             $sod = Intervals::startOfArchiveDay($stop, $this->config->timezone);
             $eod = Intervals::endOfDay($sod, $this->config->timezone);
             $units = $this->archive->unitSystem() ?? $this->config->unitSystem;
             $day = ReplayDay::restore($job['stats'], $sod, $eod, $units, $this->policy);
             $built = $stop % $seconds === 0 ? $this->build($stop, $seconds) : null;
-            if ($built !== null) {
-                $this->store($built, true);
+            if ($built !== null && (!$this->archive->exists($stop) || $this->journalCovers($stop, $seconds))) {
+                $this->store($built, true, false);
                 ++$done;
             }
             // Existing records without retained LOOP input are preserved.
@@ -568,11 +597,11 @@ final class Archiver
             if ($record !== null) {
                 $interval = $record['interval'] ?? null;
                 if ((is_int($interval) || is_float($interval)) && $interval > 0) {
-                    $day->addRecord($record, true, 60 * $interval);
                     if ($this->settings->loopHilo && $built !== null && $built->packets > 0
                         && $built->accumulator->start() >= $sod && $built->accumulator->stop() <= $eod) {
-                        $day->mergeHilo($built->accumulator);
+                        $this->mergeLoopHilo($day, $built->accumulator);
                     }
+                    $day->addRecord($record, true, 60 * $interval);
                 }
             }
             $dayEnded = Intervals::startOfArchiveDay($this->nextReplayStop($stop, $seconds), $this->config->timezone) !== $sod;
@@ -580,7 +609,9 @@ final class Archiver
             if ($dayEnded || $finished) {
                 $this->changes?->before($sod, $eod);
                 try {
-                    $this->archive->replaceDay($sod, $day);
+                    // A replay can finish while newer records already exist in this day.
+                    // Publish from the complete archive under its write lock.
+                    $this->archive->transaction(fn() => $this->repairDay($sod));
                 } finally {
                     $this->changes?->after($sod, $eod);
                 }
@@ -595,7 +626,7 @@ final class Archiver
                 $stop,
                 $dayEnded ? null : ReplayDay::snapshot($day),
             )) {
-                $this->live->clearPending($stop, $this->config->id);
+                $this->live->clearPending($stop, $this->config->id, $generation);
             }
         }
         return $done;
@@ -621,7 +652,7 @@ final class Archiver
      * @param int|null $since Where to start, or null for the journal's first packet.
      * @param int|null $until Where to stop, or null for its last.
      */
-    public function catchUp(?int $since, ?int $until, Budget $budget, bool $replace = false): Progress
+    public function catchUp(?int $since, ?int $until, Budget $budget, bool $replace = false, ?int $now = null): Progress
     {
         [$first, $last] = $this->live->span();
         if ($first === null || $last === null) {
@@ -634,21 +665,23 @@ final class Archiver
 
         $done = 0;
         $stop = Intervals::stop($since, $seconds);
-        $end = Intervals::stop($until, $seconds);
+        $now ??= time();
+        $end = min(Intervals::stop($until, $seconds), Intervals::stop($now - $this->settings->archiveDelay - $seconds + 1, $seconds));
         while ($stop <= $end) {
             if (!$budget->allows()) {
                 return new Progress($done, false, $stop);
             }
+            $generation = $this->live->pendingGeneration($stop, $this->config->id);
             $existing = $this->archive->exists($stop);
             $this->preserveHardware($stop - $seconds, $stop);
-            if ($existing && !$replace) {
-                $this->live->clearPending($stop, $this->config->id);
+            if ($existing && (!$replace || !$this->journalCovers($stop, $seconds))) {
+                $this->live->clearPending($stop, $this->config->id, $generation);
                 $stop += $seconds;
                 continue;
             }
             $built = $this->build($stop, $seconds);
             if ($built === null) {
-                $this->live->clearPending($stop, $this->config->id);
+                $this->live->clearPending($stop, $this->config->id, $generation);
                 $next = $this->live->nextPacketAfter($stop, $senders);
                 if ($next === null) {
                     break;
@@ -660,10 +693,139 @@ final class Archiver
                 ++$done;
                 $budget->spent();
             }
-            $this->live->clearPending($stop, $this->config->id);
+            $this->live->clearPending($stop, $this->config->id, $generation);
             $stop += $seconds;
         }
         return new Progress($done, true, null);
+    }
+
+    private function journalCovers(int $stop, int $seconds): bool
+    {
+        if ($this->live->getMeta('retention_pruned') === null) {
+            return true;
+        }
+        [$first] = $this->live->span();
+        return $first !== null && $stop - $seconds - self::RUN_UP > $first;
+    }
+
+    /** @param array<string, mixed> $old
+     * @param array<string, mixed> $new
+     */
+    private function replaceIntervalDay(Built $built, array $old, array $new): void
+    {
+        $sod = Intervals::startOfArchiveDay($built->stop, $this->config->timezone);
+        $eod = Intervals::endOfDay($sod, $this->config->timezone);
+        $units = $this->archive->unitSystem();
+        $day = $this->archive->loadDay($sod, $units);
+        $before = new Accum($sod, $eod, $units, $this->policy);
+        $after = new Accum($sod, $eod, $units, $this->policy);
+        try {
+            $before->addRecord($old, false, ArchiveDb::weightOf($old));
+        } catch (IntervalError) {
+            // An invalid interval never contributed to the daily sums.
+        }
+        if ($this->settings->loopHilo && $built->packets > 0
+            && $built->accumulator->start() >= $sod && $built->accumulator->stop() <= $eod) {
+            $this->mergeLoopHilo($after, $built->accumulator);
+        }
+        try {
+            $after->addRecord($new, true, ArchiveDb::weightOf($new));
+        } catch (IntervalError) {
+            // WeeWX still keeps the archive record without folding its sums.
+        }
+        $rebuilt = null;
+        foreach ($day->types() as $type) {
+            $stats = $day->get($type);
+            if (!$stats instanceof ScalarStats && !$stats instanceof VecStats) {
+                continue;
+            }
+            $previous = $before->has($type) ? $before->get($type)->statsTuple() : [];
+            $replacement = $after->has($type) ? $after->get($type) : null;
+            $next = $replacement?->statsTuple() ?? [];
+            $tuple = $stats->statsTuple();
+            // Direction at offset 8 belongs to the gust maximum. Only the
+            // shared scalar sums and trailing vector sums are additive.
+            $sums = $stats instanceof VecStats ? [4, 5, 6, 7, 9, 10, 11, 12, 13] : [4, 5, 6, 7];
+            foreach ($sums as $index) {
+                $tuple[$index] = ($tuple[$index] ?? 0) - ($previous[$index] ?? 0) + ($next[$index] ?? 0);
+            }
+            $stats->setStats($tuple);
+            foreach (['min' => 'mintime', 'max' => 'maxtime'] as $field => $timeField) {
+                $value = $replacement instanceof ScalarStats || $replacement instanceof VecStats ? $replacement->$field : null;
+                $stored = $stats->$field;
+                $timestamp = $stats->$timeField;
+                if ($value !== null && ($stored === null || ($field === 'min' ? $value <= $stored : $value >= $stored))) {
+                    $source = $replacement;
+                } elseif ($timestamp !== null && $built->stop - $built->seconds < $timestamp && $timestamp <= $built->stop) {
+                    // Only an extreme owned by this interval needs a full day scan.
+                    // Pruned runner-up LOOP evidence can legitimately come back duller.
+                    $rebuilt ??= $this->dayFromJournal($sod);
+                    $source = $rebuilt->has($type) ? $rebuilt->get($type) : null;
+                } else {
+                    continue;
+                }
+                $stats->$field = $source instanceof ScalarStats || $source instanceof VecStats ? $source->$field : null;
+                $stats->$timeField = $source instanceof ScalarStats || $source instanceof VecStats ? $source->$timeField : null;
+                if ($field === 'max' && $stats instanceof VecStats) {
+                    $stats->maxDir = $source instanceof VecStats ? $source->maxDir : null;
+                }
+            }
+        }
+        $this->archive->storeDay($sod, $day, $built->stop);
+    }
+
+    private function repairDay(int $sod): void
+    {
+        $this->archive->replaceDay($sod, $this->dayFromJournal($sod));
+    }
+
+    private function dayFromJournal(int $sod): Accum
+    {
+        $eod = Intervals::endOfDay($sod, $this->config->timezone);
+        $day = new Accum($sod, $eod, $this->archive->unitSystem(), $this->policy);
+        $records = [];
+        $intervals = [];
+        foreach ($this->archive->records($sod, $eod) as $record) {
+            $interval = $record['interval'] ?? null;
+            $stop = $record['dateTime'];
+            if (!is_int($stop) || (!is_int($interval) && !is_float($interval)) || $interval <= 0) {
+                continue;
+            }
+            $records[$stop] = $record;
+            $intervals[$stop] = (int) round($interval * 60);
+        }
+        if ($this->settings->loopHilo) {
+            foreach ($this->live->packets($sod, $eod, PacketKind::Loop, $this->config->senders) as $packet) {
+                $seconds = $this->config->interval($this->settings);
+                $start = max($sod, Intervals::start($packet->dateTime, $seconds));
+                $stop = min($eod, Intervals::stop($packet->dateTime, $seconds));
+                foreach ($intervals as $end => $span) {
+                    if ($end - $span < $packet->dateTime && $packet->dateTime <= $end) {
+                        continue 2;
+                    }
+                    // Fill journal-only gaps without changing an existing record's grid.
+                    if ($end < $packet->dateTime) {
+                        $start = max($start, $end);
+                    } elseif ($end - $span >= $packet->dateTime) {
+                        $stop = min($stop, $end - $span);
+                    }
+                }
+                $intervals[$stop] = $stop - $start;
+            }
+        }
+        ksort($intervals);
+        foreach ($intervals as $stop => $seconds) {
+            if ($this->settings->loopHilo && $stop - $seconds >= $sod && $stop <= $eod) {
+                $built = $this->build($stop, $seconds);
+                if ($built !== null && $built->packets > 0) {
+                    $this->mergeLoopHilo($day, $built->accumulator);
+                }
+            }
+            if (isset($records[$stop])) {
+                $day->addRecord($records[$stop], true, ArchiveDb::weightOf($records[$stop]));
+            }
+        }
+        return $day;
     }
 
     /**
@@ -671,8 +833,8 @@ final class Archiver
      * there, day by day: the day's records first, then its summaries from
      * the archive table, then the LOOP extremes on top. Extremes cannot be
      * subtracted, a maximum does not remember the runner-up, so a day is
-     * corrected by building it from nothing. Returns how many records were
-     * written.
+     * corrected from its records and retained LOOP input. Pruned LOOP extremes
+     * can come back duller. Returns how many records were written.
      */
     public function rebuild(int $start, int $stop): int
     {
@@ -693,18 +855,14 @@ final class Archiver
                         if ($built === null) {
                             continue;
                         }
+                        if ($this->archive->exists($ts) && !$this->journalCovers($ts, $seconds)) {
+                            continue;
+                        }
                         $this->archive->addRecord($built->record, replace: true, updateDaily: false);
                         $this->archive->storeRainEvidence($built);
                         $builts[] = $built;
                     }
-                    $this->archive->rebuildDay($sod);
-                    if ($this->settings->loopHilo) {
-                        foreach ($builts as $built) {
-                            if ($built->packets > 0) {
-                                $this->sharpenDay($built);
-                            }
-                        }
-                    }
+                    $this->repairDay($sod);
                     return count($builts);
                 });
             }

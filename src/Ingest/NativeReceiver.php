@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Ingest;
@@ -27,7 +29,28 @@ final class NativeReceiver
         if (!$config->ingest->enabled) {
             return self::error('disabled', 404);
         }
+        $now = $this->runtime->clock->now();
+        $known = null;
+        $limited = false;
         try {
+            $admission = $this->runtime->ingest();
+            $store = $this->runtime->live()->collector();
+            $token = preg_match('/^Bearer ([a-f0-9]{64})$/D', $authorization, $match) === 1 ? $match[1] : '';
+            $known = $token === '' ? null : $store->knownCollector($token);
+            $limited = true;
+            $preauthenticated = $known !== null && $method === 'POST' && $query === '' && $https;
+            if (!$admission->permitPeer($peer, $now, $config->ingest, $preauthenticated)) {
+                throw new Rejected('rate_limited', 429);
+            }
+            if ($known === null || !$store->trusted($known)) {
+                if (!$admission->permitDiscovery($now, $config->ingest) || $admission->blocked($peer, $now)) {
+                    throw new Rejected('rate_limited', 429);
+                }
+            }
+            if ($known !== null && (!$admission->permitNative($known, $now, $config->ingest)
+                || !$store->permit($known, $now, $config->ingest->senderRequestsPerMinute))) {
+                throw new Rejected('rate_limited', 429);
+            }
             if (!$https) {
                 throw new Rejected('https_required', 403);
             }
@@ -37,18 +60,8 @@ final class NativeReceiver
             if ($query !== '') {
                 throw new Rejected('query_not_allowed');
             }
-            $now = $this->runtime->clock->now();
-            if (!$this->runtime->ingest()->permit($peer, $now, $config->ingest)) {
-                throw new Rejected('rate_limited', 429);
-            }
-            if (preg_match('/^Bearer ([a-f0-9]{64})$/D', $authorization, $match) !== 1) {
+            if ($token === '') {
                 throw new Rejected('unauthorized', 401);
-            }
-            $token = $match[1];
-            $store = $this->runtime->live()->collector();
-            $known = $store->knownCollector($token);
-            if ($known !== null && !$store->permit($known, $now, $config->ingest->senderRequestsPerMinute)) {
-                throw new Rejected('rate_limited', 429);
             }
             if (strtolower(trim(explode(';', $contentType, 2)[0])) !== 'application/json') {
                 throw new Rejected('unsupported_content_type', 415);
@@ -77,6 +90,18 @@ final class NativeReceiver
                 ],
             ]);
         } catch (Rejected $error) {
+            $admission = $this->runtime->ingest();
+            if (!$limited && !$admission->permit($peer, $now, $config->ingest)) {
+                $error = new Rejected('rate_limited', 429);
+            }
+            if ($error->status < 500 && $error->status !== 429) {
+                $scope = $known === null ? $peer : 'sender:native:' . $known;
+                if ($admission->blocked($scope, $now)) {
+                    $error = new Rejected('rate_limited', 429);
+                } else {
+                    $admission->failed($peer, $now, $known === null ? null : 'native:' . $known);
+                }
+            }
             if ($error->status !== 429) {
                 $this->runtime->log->warning('native ingest: ' . $error->getMessage());
             }

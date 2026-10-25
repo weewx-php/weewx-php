@@ -1,10 +1,13 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Ingest;
 
 use InvalidArgumentException;
+use Throwable;
 use WeewxPhp\Config\IngestConfig;
 use WeewxPhp\Config\Settings;
 use WeewxPhp\Config\StationConfig;
@@ -105,6 +108,17 @@ final class Store
         return $expected !== null && hash_equals($expected, $offered);
     }
 
+    public function wundergroundKeyMatches(string $offered): bool
+    {
+        $digest = hash('sha256', $offered);
+        $known = $this->db->scalar("SELECT credential FROM ingest_sender WHERE protocol = 'wunderground' AND credential = ?", [$digest]);
+        if ($known !== null) {
+            return hash_equals(Sqlite::text($known), $digest);
+        }
+        $setup = $this->meta('wunderground');
+        return $setup !== null && hash_equals($setup, $offered);
+    }
+
     /** Authenticate before parsing measurements, so malformed readings affect their own sender.
      * The receiver must validate the Ecowitt path before calling this method.
      */
@@ -163,74 +177,87 @@ final class Store
         int $maxPending,
         callable $write,
     ): Sender {
-        return $this->db->transaction(function () use ($observation, $password, $peer, $https, $now, $maxPending, $write): Sender {
-            $wu = $observation->protocol === Protocol::Wunderground;
-            $digest = $wu ? hash('sha256', $password) : null;
-            $row = $wu
-                ? $this->db->one('SELECT * FROM ingest_sender WHERE credential = ?', [$digest])
-                : $this->db->one("SELECT * FROM ingest_sender WHERE protocol = 'ecowitt' AND identity = ?", [$observation->identity]);
-            if ($row === null) {
-                if ($wu) {
-                    $free = $this->meta('wunderground');
-                    if ($free === null || !hash_equals($free, $password)) {
-                        throw new Rejected('unauthorised', 403);
+        $delivered = null;
+        try {
+            return $this->db->transaction(function () use ($observation, $password, $peer, $https, $now, $maxPending, $write, &$delivered): Sender {
+                $wu = $observation->protocol === Protocol::Wunderground;
+                $digest = $wu ? hash('sha256', $password) : null;
+                $row = $wu
+                    ? $this->db->one('SELECT * FROM ingest_sender WHERE credential = ?', [$digest])
+                    : $this->db->one("SELECT * FROM ingest_sender WHERE protocol = 'ecowitt' AND identity = ?", [$observation->identity]);
+                if ($row === null) {
+                    if ($wu) {
+                        $free = $this->meta('wunderground');
+                        if ($free === null || !hash_equals($free, $password)) {
+                            throw new Rejected('unauthorised', 403);
+                        }
                     }
-                }
-                $pending = (int) Sqlite::text($this->db->scalar("SELECT COUNT(*) FROM ingest_sender WHERE state = 'pending'"));
-                $total = (int) Sqlite::text($this->db->scalar('SELECT COUNT(*) FROM ingest_sender'));
-                if ($pending >= $maxPending || $total >= 2000) {
-                    throw new Rejected('discovery full', 503);
-                }
-                $id = $observation->protocol->value . '_' . bin2hex(random_bytes(6));
-                $this->db->exec(
-                    'INSERT INTO ingest_sender (id, protocol, identity, credential, name, model, peer, first_seen, last_seen, transport)'
-                    . ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                    [$id, $observation->protocol->value, $observation->identity, $digest, $id,
-                        $observation->model, $peer, $now, $now, $https ? 'https' : 'http'],
-                );
-                if ($wu) {
-                    $this->db->exec("UPDATE ingest_meta SET value = ? WHERE name = 'wunderground'", [$this->unusedSecret()]);
-                }
-                $row = $this->db->one('SELECT * FROM ingest_sender WHERE id = ?', [$id]);
-            }
-            if ($row === null) {
-                throw new Rejected('sender unavailable', 503);
-            }
-            $sender = Sender::fromRow($row);
-            if (in_array($sender->state, ['pending', 'adopted'], true)) {
-                $known = [];
-                foreach ($this->db->query('SELECT native FROM ingest_field WHERE sender = ?', [$sender->id]) as $fieldRow) {
-                    $known[Sqlite::text($fieldRow['native'])] = true;
-                }
-                foreach ($observation->fields as $native => $field) {
-                    if (!Parser::measurementKey($native)) {
-                        continue;
+                    $pending = (int) Sqlite::text($this->db->scalar("SELECT COUNT(*) FROM ingest_sender WHERE state = 'pending'"));
+                    $total = (int) Sqlite::text($this->db->scalar('SELECT COUNT(*) FROM ingest_sender'));
+                    if ($pending >= $maxPending || $total >= 2000) {
+                        throw new Rejected('discovery full', 503);
                     }
-                    if (count($known) >= 256 && !isset($known[$native])) {
-                        continue;
-                    }
+                    $id = $observation->protocol->value . '_' . bin2hex(random_bytes(6));
                     $this->db->exec(
-                        'INSERT INTO ingest_field (sender, native, observation, value, unit, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)'
-                        . ' ON CONFLICT(sender, native) DO UPDATE SET observation = excluded.observation, value = excluded.value, unit = excluded.unit, last_seen = excluded.last_seen',
-                        [$sender->id, $native, $field['observation'], $field['value'], $field['unit'], $now, $now],
+                        'INSERT INTO ingest_sender (id, protocol, identity, credential, name, model, peer, first_seen, last_seen, transport)'
+                        . ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                        [$id, $observation->protocol->value, $observation->identity, $digest, $id,
+                            $observation->model, $peer, $now, $now, $https ? 'https' : 'http'],
                     );
-                    $known[$native] = true;
+                    if ($wu) {
+                        $this->db->exec("UPDATE ingest_meta SET value = ? WHERE name = 'wunderground'", [$this->unusedSecret()]);
+                    }
+                    $row = $this->db->one('SELECT * FROM ingest_sender WHERE id = ?', [$id]);
                 }
+                if ($row === null) {
+                    throw new Rejected('sender unavailable', 503);
+                }
+                $sender = Sender::fromRow($row);
+                if (in_array($sender->state, ['pending', 'adopted'], true)) {
+                    $known = [];
+                    foreach ($this->db->query('SELECT native FROM ingest_field WHERE sender = ?', [$sender->id]) as $fieldRow) {
+                        $known[Sqlite::text($fieldRow['native'])] = true;
+                    }
+                    foreach ($observation->fields as $native => $field) {
+                        if (!Parser::measurementKey($native)) {
+                            continue;
+                        }
+                        if (count($known) >= 256 && !isset($known[$native])) {
+                            continue;
+                        }
+                        $this->db->exec(
+                            'INSERT INTO ingest_field (sender, native, observation, value, unit, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?, ?)'
+                            . ' ON CONFLICT(sender, native) DO UPDATE SET observation = excluded.observation, value = excluded.value, unit = excluded.unit, last_seen = excluded.last_seen',
+                            [$sender->id, $native, $field['observation'], $field['value'], $field['unit'], $now, $now],
+                        );
+                        $known[$native] = true;
+                    }
+                }
+                // Blocking and adoption serialize with this write. No pre-adoption
+                // sample is replayed into the journal when the state later changes.
+                $stored = $sender->state === 'adopted' && $write($sender);
+                if ($sender->state === 'adopted') {
+                    $delivered = $sender;
+                }
+                $outcome = $sender->state === 'adopted' ? ($stored ? 'stored' : 'duplicates')
+                    : ($sender->state === 'pending' ? 'pending' : 'discarded');
+                $this->record($sender->id, $outcome, $now, $observation);
+                $sample = in_array($sender->state, ['pending', 'adopted'], true) ? $observation->sample : null;
+                $this->db->exec(
+                    'UPDATE ingest_sender SET last_seen = ?, received = received + 1, stored = stored + ?, '
+                    . 'peer = ?, transport = ?, model = ?, sample = ? WHERE id = ?',
+                    [$now, $stored ? 1 : 0, $peer, $https ? 'https' : 'http', $observation->model, $sample, $sender->id],
+                );
+                return $this->sender($sender->id) ?? $sender;
+            });
+        } catch (Throwable $error) {
+            // The live commit is the delivery boundary. A bookkeeping failure
+            // afterwards must not ask a console to resend a durable packet.
+            if ($delivered !== null) {
+                return $delivered;
             }
-            // Blocking and adoption serialize with this write. No pre-adoption
-            // sample is replayed into the journal when the state later changes.
-            $stored = $sender->state === 'adopted' && $write($sender);
-            $outcome = $sender->state === 'adopted' ? ($stored ? 'stored' : 'duplicates')
-                : ($sender->state === 'pending' ? 'pending' : 'discarded');
-            $this->record($sender->id, $outcome, $now, $observation);
-            $sample = in_array($sender->state, ['pending', 'adopted'], true) ? $observation->sample : null;
-            $this->db->exec(
-                'UPDATE ingest_sender SET last_seen = ?, received = received + 1, stored = stored + ?, '
-                . 'peer = ?, transport = ?, model = ?, sample = ? WHERE id = ?',
-                [$now, $stored ? 1 : 0, $peer, $https ? 'https' : 'http', $observation->model, $sample, $sender->id],
-            );
-            return $this->sender($sender->id) ?? $sender;
-        });
+            throw $error;
+        }
     }
 
     /** @return list<Sender> */
@@ -281,20 +308,25 @@ final class Store
     /** Shared across PHP requests/processes; never trusts a client-supplied forwarding header here. */
     public function permit(string $peer, int $now, IngestConfig $config): bool
     {
-        return $this->db->transaction(function () use ($peer, $now, $config): bool {
-            // Only the small limiter table is maintained on reception. Samples
-            // and field inventories are cleaned by the periodic tick.
+        return $this->db->transaction(fn(): bool => $this->permitPeer($peer, $now, $config) && $this->permitDiscovery($now, $config));
+    }
+
+    /** Bound pre-body work. Verified credentials bypass only the shared overflow bucket. */
+    public function permitPeer(string $peer, int $now, IngestConfig $config, bool $preauthenticated = false): bool
+    {
+        $peer = self::peerBucket($peer);
+        return $this->db->transaction(function () use ($peer, $now, $config, $preauthenticated): bool {
             $this->pruneLimits($now);
-            foreach (['*', $peer] as $key) {
-                $limit = $key === '*' ? $config->requestsPerMinute * 10 : $config->requestsPerMinute;
-                // IP failure blocks are checked AFTER authentication. Known
-                // consoles behind that IP keep their own allowance.
-                if (!$this->limit($key, $now, $limit, false)) {
-                    return false;
-                }
-            }
-            return true;
+            // Failure blocks are checked after authentication so known consoles
+            // behind a blocked discovery IP keep their sender allowance.
+            return $this->limit($peer, $now, $config->requestsPerMinute, false, $preauthenticated);
         });
+    }
+
+    /** Only discovery consumes the global allowance; call after the peer check. */
+    public function permitDiscovery(int $now, IngestConfig $config): bool
+    {
+        return $this->db->transaction(fn(): bool => $this->limit('*', $now, $config->requestsPerMinute * 10, false));
     }
 
     public function permitSender(?Sender $sender, string $peer, int $now, IngestConfig $config): bool
@@ -307,18 +339,25 @@ final class Store
 
     public function blocked(string $scope, int $now): bool
     {
+        $scope = self::peerBucket($scope);
         $until = $this->db->scalar('SELECT blocked_until FROM ingest_limit WHERE peer = ?', [$scope]);
         return $until !== null && (int) Sqlite::text($until) > $now;
     }
 
-    private function limit(string $key, int $now, int $limit, bool $sender): bool
+    private function limit(string $key, int $now, int $limit, bool $sender, bool $preauthenticated = false): bool
     {
         $row = $this->db->one('SELECT * FROM ingest_limit WHERE peer = ?', [$key]);
         if ($row === null) {
-            // Authenticated sender rows have a separate, inherently bounded
-            // namespace, so an IP-table flood cannot consume their slots.
-            if (!$sender && (int) Sqlite::text($this->db->scalar("SELECT COUNT(*) FROM ingest_limit WHERE peer NOT LIKE 'sender:%'")) >= 4096) {
-                return false;
+            // Reserved counters and authenticated sender quotas cannot be displaced
+            // by discovery. Active peer windows and failure blocks are never evicted.
+            if (!$sender && !in_array($key, ['*', 'overflow'], true)) {
+                $count = (int) Sqlite::text($this->db->scalar("SELECT COUNT(*) FROM ingest_limit WHERE peer NOT LIKE 'sender:%' AND peer NOT IN ('*', 'overflow')"));
+                if ($count >= 4096) {
+                    $count -= $this->db->exec("DELETE FROM ingest_limit WHERE peer IN (SELECT peer FROM ingest_limit WHERE peer NOT LIKE 'sender:%' AND peer NOT IN ('*', 'overflow') AND window < ? AND blocked_until <= ? ORDER BY touched, peer LIMIT ?)", [intdiv($now, 60), $now, $count - 4095]);
+                    if ($count >= 4096) {
+                        return $preauthenticated || $this->limit('overflow', $now, $limit, false);
+                    }
+                }
             }
             $this->db->exec(
                 'INSERT INTO ingest_limit (peer, window, requests, failed_window, touched) VALUES (?, ?, 0, ?, ?)',
@@ -337,7 +376,7 @@ final class Store
     /** Thirty failures in five minutes block the authenticated sender, or discovery on its IP, for ten minutes. */
     public function failed(string $peer, int $now, ?string $sender = null): void
     {
-        $peer = $sender === null ? $peer : 'sender:' . $sender;
+        $peer = $sender === null ? self::peerBucket($peer) : 'sender:' . $sender;
         $this->db->transaction(function () use ($peer, $now): void {
             $window = intdiv($now, 300);
             $this->db->exec(
@@ -346,6 +385,23 @@ final class Store
             );
             $this->db->exec('UPDATE ingest_limit SET blocked_until = ? WHERE peer = ? AND failures >= 30', [$now + 600, $peer]);
         });
+    }
+
+    private static function peerBucket(string $peer): string
+    {
+        $packed = str_contains($peer, ':') && !str_starts_with($peer, 'sender:') ? inet_pton($peer) : false;
+        if ($packed === false || strlen($packed) !== 16) {
+            return $peer;
+        }
+        if (bin2hex(substr($packed, 0, 12)) === '00000000000000000000ffff') {
+            return sprintf('%d.%d.%d.%d', ord($packed[12]), ord($packed[13]), ord($packed[14]), ord($packed[15]));
+        }
+        return bin2hex(substr($packed, 0, 8)) . '/64';
+    }
+
+    public function permitNative(string $collector, int $now, IngestConfig $config): bool
+    {
+        return $this->db->transaction(fn(): bool => $this->limit('sender:native:' . $collector, $now, $config->senderRequestsPerMinute, true));
     }
 
     public function prune(int $now): void
@@ -367,7 +423,7 @@ final class Store
         if ($now - (int) ($this->meta('limits_pruned') ?? '0') < 600) {
             return;
         }
-        $this->db->exec('DELETE FROM ingest_limit WHERE touched < ? AND blocked_until < ?', [$now - 3600, $now]);
+        $this->db->exec('DELETE FROM ingest_limit WHERE touched < ? AND window < ? AND blocked_until <= ?', [$now - 3600, intdiv($now, 60), $now]);
         $this->db->exec("INSERT INTO ingest_meta VALUES ('limits_pruned', ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value", [(string) $now]);
     }
 
