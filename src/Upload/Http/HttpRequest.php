@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Upload\Http;
@@ -33,9 +35,10 @@ final class HttpRequest
         return new self($this->method, $this->url, $this->body, $this->headers, $timeout, $this->maxResponseBytes);
     }
 
-    /** The URL with its query string's secrets masked, for a log line. */
+    /** The URL with credentials masked, for a log line. */
     public function masked(): string
     {
-        return preg_replace('/((?:PASSWORD|siteAuthenticationKey|key|token|p)=)[^&]*/i', '$1***', $this->url) ?? $this->url;
+        $url = preg_replace('#(/pws/update/)[^/?\#]+#i', '$1***', $this->url) ?? $this->url;
+        return preg_replace('/((?:PASSWORD|siteAuthenticationKey|key|token|p)=)[^&]*/i', '$1***', $url) ?? $url;
     }
 }

@@ -1,8 +1,12 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Frontend;
+
+use WeewxPhp\Weewx\Units;
 
 /** Per-theme presentation. Never changes process locale or stored cache values. */
 final class Output
@@ -34,7 +38,10 @@ final class Output
         if ($result instanceof Report) {
             return $result->withOutput($this, $observation);
         }
-        $unit = $this->units[$observation] ?? $this->units[$result->group ?? ''] ?? null;
+        $unit = $this->units[$observation] ?? null;
+        if ($unit === null || $result->unit === null || !Units::canConvert($result->unit, $unit)) {
+            $unit = $this->units[$result->group ?? ''] ?? null;
+        }
         if ($unit !== null) {
             $result = $result->to($unit);
         }

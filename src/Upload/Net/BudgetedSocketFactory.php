@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Upload\Net;
@@ -15,14 +17,14 @@ final class BudgetedSocketFactory implements SocketFactory
         private readonly Budget $budget,
     ) {}
 
-    public function open(string $host, int $port, bool $tls, bool $verify, int $timeout): Connection
+    public function open(string $host, int $port, bool $tls, bool $verify, int|float $timeout): Connection
     {
         $left = $this->budget->timeLeft();
         if (is_finite($left)) {
-            if ($left < 1.0) {
+            if ($left <= 0) {
                 throw new Rejected('no time left in this tick');
             }
-            $timeout = min($timeout, (int) floor($left));
+            $timeout = min($timeout, $left);
         }
         return $this->inner->open($host, $port, $tls, $verify, $timeout);
     }

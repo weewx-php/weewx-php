@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Upload\Service;
@@ -13,6 +15,12 @@ use WeewxPhp\Upload\Service\Weathercloud;
 
 final class WeathercloudTest extends TestCase
 {
+    public function testDefaultUploadsAreTenMinutesApart(): void
+    {
+        self::assertSame(\WeewxPhp\Upload\Trigger::Interval, Kind::Weathercloud->defaultTrigger());
+        self::assertSame(600, Kind::Weathercloud->defaultEvery());
+    }
+
     public function testEveryValueIsAnIntegerInTenths(): void
     {
         $upload = new Weathercloud(Uploads::config(Kind::Weathercloud, ['wid' => 'abc123', 'key' => 'k']), new FakeHttpClient());
@@ -23,7 +31,7 @@ final class WeathercloudTest extends TestCase
         self::assertSame('251', $query['type']);
         self::assertSame('weewx-php', $query['ver']);
         self::assertSame('20260826', $query['date']);
-        self::assertSame('08:50', $query['time']);
+        self::assertSame('0850', $query['time']);
         self::assertSame('200', $query['temp']);
         self::assertSame('61', $query['hum']);
         self::assertSame('122', $query['dew']);

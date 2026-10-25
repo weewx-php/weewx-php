@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Upload;
@@ -66,6 +68,11 @@ enum Kind: string
         return !in_array($this, [self::Cwop, self::Weathercloud, self::Mqtt], true);
     }
 
+    public function horizon(): ?int
+    {
+        return in_array($this, [self::Influx, self::Mqtt], true) ? null : Records::HORIZON;
+    }
+
     /** Whether the `live` trigger means anything: only a broker wants every packet. */
     public function allowsLive(): bool
     {
@@ -75,7 +82,7 @@ enum Kind: string
     public function defaultTrigger(): Trigger
     {
         return match ($this) {
-            self::Cwop => Trigger::Interval,
+            self::Cwop, self::Weathercloud => Trigger::Interval,
             self::Mqtt => Trigger::Live,
             default => Trigger::Record,
         };
@@ -84,7 +91,7 @@ enum Kind: string
     /** Seconds between runs on the `interval` trigger. CWOP asks for one report every ten minutes and means it. */
     public function defaultEvery(): int
     {
-        return $this === self::Cwop ? 600 : 900;
+        return in_array($this, [self::Cwop, self::Weathercloud], true) ? 600 : 900;
     }
 
     /**

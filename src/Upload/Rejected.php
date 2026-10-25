@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Upload;
@@ -20,6 +22,7 @@ final class Rejected extends RuntimeException
         string $message,
         public readonly bool $permanent = false,
         ?Throwable $previous = null,
+        public readonly ?Posted $posted = null,
     ) {
         parent::__construct($message, 0, $previous);
     }

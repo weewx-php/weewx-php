@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Upload\Service;
@@ -101,9 +103,6 @@ final class Ambient implements Upload
         ['dayRain', 'dailyrainin', '%.3f'],
     ];
 
-    /** What these services say, on HTTP 200, when the credentials are wrong. */
-    private const BAD_LOGIN = ['invalidpasswordid', 'badauth', 'error: not authorized', 'unable to validate', 'invalid'];
-
     public const URLS = [
         'wunderground' => 'https://weatherstation.wunderground.com/weatherstation/updateweatherstation.php',
         'pwsweather' => 'https://www.pwsweather.com/pwsupdate/pwsupdate.php',
@@ -180,7 +179,7 @@ final class Ambient implements Upload
                 $this->send($record);
             } catch (Rejected $error) {
                 if ($error->permanent) {
-                    throw $error;
+                    throw new Rejected($error->getMessage(), permanent: true, previous: $error, posted: $posted);
                 }
                 // Stop at the first refusal: the rest are almost certainly
                 // the same problem, and eleven more requests at a service
@@ -228,36 +227,22 @@ final class Ambient implements Upload
     private function judge(HttpResponse $response): void
     {
         $label = $this->kind->label();
+        if (in_array($response->status, [401, 403], true)) {
+            throw new Rejected(sprintf('%s rejected the credentials for station %s', $label, $this->station), permanent: true);
+        }
+        if ($response->status < 200 || $response->status > 299) {
+            throw new Rejected(sprintf('%s answered %d: %s', $label, $response->status, $response->excerpt()));
+        }
         if ($this->kind === Kind::Wow) {
-            // WOW signals a bad login with a 403 and says nothing in the body.
-            if ($response->status === 403) {
-                throw new Rejected(sprintf('%s rejected the site id or key for %s', $label, $this->station), permanent: true);
-            }
-            if ($response->status < 200 || $response->status > 299) {
-                throw new Rejected(sprintf('%s answered %d: %s', $label, $response->status, $response->excerpt()));
-            }
             return;
         }
         $body = strtolower(trim($response->body));
-        if (str_starts_with($body, 'error') || self::saysBadLogin($body)) {
+        if (preg_match('/^(?:error|invalid|badauth|unable to validate)/m', $body) === 1) {
             throw new Rejected(
                 sprintf('%s rejected the credentials for station %s: %s', $label, $this->station, $response->excerpt()),
                 permanent: true,
             );
         }
-        if ($response->status < 200 || $response->status > 299) {
-            throw new Rejected(sprintf('%s answered %d: %s', $label, $response->status, $response->excerpt()));
-        }
-    }
-
-    private static function saysBadLogin(string $body): bool
-    {
-        foreach (self::BAD_LOGIN as $word) {
-            if (str_contains($body, $word)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     /** @param array<string, mixed> $record */

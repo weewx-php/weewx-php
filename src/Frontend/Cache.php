@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Frontend;
@@ -58,6 +60,10 @@ final class Cache
     {
         $token = ArchiveReader::fingerprint($archive->database);
         $signature = hash('sha256', self::VERSION . CacheJson::encode($archive));
+        $known = $this->db->one('SELECT * FROM source WHERE archive = ?', [$archive->id]);
+        if ($known !== null && (self::integer($known['pending']) > 0 || ($known['signature'] === $signature && $known['token'] === $token))) {
+            return self::integer($known['revision']);
+        }
         return $this->db->transaction(function () use ($archive, $token, $signature): int {
             $known = $this->db->one('SELECT * FROM source WHERE archive = ?', [$archive->id]);
             if ($known === null) {
@@ -127,8 +133,9 @@ final class Cache
             $params[] = $span->end;
         }
         // Scheduled data keeps its publication cadence. Fixed, closed data can be repaired now.
-        $resetWork = $span === null ? 'NULL' : 'CASE WHEN start IS NULL OR (end > ? AND start < ?) OR spec LIKE ? THEN NULL ELSE work END';
-        $resetParams = $span === null ? $params : [$span->start, $span->end, '%"aggregate":"historical_%', ...$params];
+        // Raw scans can keep an unchanged prefix. A daily summary may already include later records in that day.
+        $resetWork = $span === null ? 'NULL' : 'CASE WHEN spec LIKE ? OR spec LIKE ? THEN NULL WHEN json_extract(work, \'$.daily\') = 0 AND json_extract(work, \'$.readThrough\') < ? THEN work WHEN start IS NULL OR (end > ? AND start < ?) THEN NULL ELSE work END';
+        $resetParams = $span === null ? $params : ['%"aggregate":"historical_%', '%"analysis":"compare_month"%', $span->start, $span->start, $span->end, ...$params];
         $this->db->exec('UPDATE request SET dirty = 1, work = ' . $resetWork . ', due = CASE WHEN due = 9223372036854775807 THEN 0 ELSE due END WHERE archive = ?' . $affected, $resetParams);
         $this->db->exec('DELETE FROM chunk WHERE archive = ?' . ($span === null ? '' : ' AND end > ? AND start < ?'), $span === null ? [$archive] : [$archive, $span->start, $span->end]);
         $this->db->exec('DELETE FROM aggregate_state WHERE archive = ?' . ($span === null ? '' : ' AND end > ? AND start < ?'), $span === null ? [$archive] : [$archive, $span->start, $span->end]);
@@ -138,6 +145,10 @@ final class Cache
     public function register(string $archive, Spec $spec, int $now, bool $pinned = false): string
     {
         $id = self::key($archive, $spec);
+        $known = $this->db->one('SELECT touched, pinned FROM request WHERE id = ?', [$id]);
+        if ($known !== null && self::integer($known['touched']) >= $now - 3600 && (!$pinned || self::integer($known['pinned']) === 1)) {
+            return $id;
+        }
         $this->db->transaction(function () use ($id, $archive, $spec, $now, $pinned): void {
             $known = $this->db->one('SELECT touched, pinned FROM request WHERE id = ?', [$id]);
             if ($known !== null) {
@@ -146,6 +157,7 @@ final class Cache
                 }
                 return;
             }
+            $this->db->exec('DELETE FROM request WHERE pinned = 0 AND touched < ? AND NOT EXISTS(SELECT 1 FROM theme_query WHERE request = id)', [$now - 30 * 86400]);
             if (self::integer($this->db->scalar('SELECT COUNT(*) FROM request')) >= self::MAX_REQUESTS) {
                 throw new QueryError('Analytics query limit reached; remove unused registrations');
             }

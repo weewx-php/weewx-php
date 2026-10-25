@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Frontend;
@@ -18,6 +20,57 @@ use WeewxPhp\Weewx\UnitSystem;
 
 final class WorkerProgressTest extends TestCase
 {
+    public function testDerivedAlltimeWorkSurvivesWritesBeyondItsCursor(): void
+    {
+        $dir = TempDir::create('worker-alltime-progress');
+        $archive = Archives::config(database: $dir . '/weather.sdb');
+        $db = ArchiveDb::open($archive->database, JournalMode::Wal, new Policy(), $archive->timezone, create: true);
+        $now = Span::timestamp('2026-09-06 12:00:00', $archive->timezone);
+        $db->transaction(function () use ($db, $now): void {
+            for ($i = 0; $i < 1536; ++$i) {
+                $db->addRecord(['dateTime' => $now - $i * 300, 'usUnits' => 17, 'interval' => 5, 'outTemp' => 20.0, 'outHumidity' => 60.0, 'windSpeed' => 2.0]);
+            }
+        });
+        $cache = new \WeewxPhp\Frontend\Cache(Archives::settings($dir));
+        $schema = new \SQLite3($archive->database);
+        $schema->exec('DROP TABLE archive_day_appTemp');
+        $schema->close();
+        $budget = new \WeewxPhp\Frontend\ReadBudget(maxRows: 600, maxStatements: 1000, milliseconds: 5000);
+        $reader = new \WeewxPhp\Frontend\ArchiveReader($archive, $budget);
+        $spec = new \WeewxPhp\Frontend\Spec(period: 'alltime', observation: 'appTemp', aggregate: 'max');
+        try {
+            $revision = $cache->observe($archive);
+            $id = $cache->register($archive->id, $spec, $now);
+            $work = new \WeewxPhp\Frontend\Computation($spec, $reader, $now);
+            try {
+                while (!$work->step($budget, $cache)) {
+                }
+                self::fail('The first slice must leave resumable work');
+            } catch (\WeewxPhp\Frontend\Deferred) {
+                $cache->progress($id, $work, $now, $revision);
+            }
+            $cache->invalidate($archive->id, Span::calendar('day', $now, $archive->timezone));
+            $saved = $cache->request($id)['work'] ?? null;
+            self::assertIsString($saved, 'An append must preserve the unmodified prefix');
+            $reader->close();
+            $budget = new \WeewxPhp\Frontend\ReadBudget(maxRows: 10000, maxStatements: 1000, milliseconds: 5000);
+            $reader = new \WeewxPhp\Frontend\ArchiveReader($archive, $budget);
+            $work = \WeewxPhp\Frontend\Computation::restore($saved, $spec, $reader);
+            while (!$work->step($budget, $cache)) {
+            }
+            self::assertTrue($cache->publish($id, $work, $now, $now + 300, $cache->revision($archive->id)));
+            self::assertIsString($cache->request($id)['payload'] ?? null);
+            $cache->progress($id, $work, $now, $cache->revision($archive->id));
+            $cache->invalidate($archive->id, new Span($now - 6 * 86400, $now - 4 * 86400));
+            self::assertNull($cache->request($id)['work'] ?? null, 'An edit in consumed history must restart work');
+        } finally {
+            $reader->close();
+            $cache->close();
+            $db->close();
+            TempDir::remove($dir);
+        }
+    }
+
     public function testWeeklySeriesFinishesWhileNewStationRecordsKeepArriving(): void
     {
         $dir = TempDir::create('worker-weekly-progress');

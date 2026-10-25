@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Frontend;
@@ -30,6 +32,73 @@ use WeewxPhp\Weewx\Policy;
 
 final class WeatherTest extends TestCase
 {
+    public function testEveryQueryRetriesAnObservationThatWasBlockedByAWriter(): void
+    {
+        self::assertSame(8.0, $this->wx->on('2024-01-01')->sum('rain')->raw());
+        self::assertSame(40.0, $this->wx->on('2024-01-01')->max('outTemp')->raw());
+        $this->wx->close();
+        $this->db->addRecord(['dateTime' => $this->ts('2024-01-01 01:00:00'), 'usUnits' => 17, 'interval' => 60, 'rain' => 3.0, 'outTemp' => 50.0]);
+        $writer = new \SQLite3(Cache::path($this->config->settings));
+        $writer->exec('BEGIN IMMEDIATE');
+        $wx = (new Weather($this->config, clock: $this->clock))->cacheOnly();
+        try {
+            self::assertSame('stale', $wx->on('2024-01-01')->sum('rain')->value()->status);
+            self::assertSame('stale', $wx->on('2024-01-01')->max('outTemp')->value()->status);
+            $writer->exec('ROLLBACK');
+            self::assertSame('stale', $wx->on('2024-01-01')->sum('rain')->value()->status);
+            $cache = new Cache($this->config->settings);
+            try {
+                self::assertGreaterThan(0, $cache->revision('kirchdorf'));
+            } finally {
+                $cache->close();
+            }
+        } finally {
+            $wx->close();
+            $writer->close();
+        }
+    }
+
+    public function testPagesReadCachedAndPendingQueriesWhileAWriterHoldsTheLock(): void
+    {
+        $query = $this->wx->on('2024-01-01')->sum('rain');
+        self::assertSame(8.0, $query->raw());
+        $this->wx->close();
+        $writer = new \SQLite3(Cache::path($this->config->settings));
+        $writer->exec('BEGIN IMMEDIATE');
+        try {
+            $wx = new Weather($this->config, clock: $this->clock);
+            self::assertSame('ready', $wx->on('2024-01-01')->sum('rain')->value()->status);
+            self::assertSame('pending', $wx->on('2024-01-01')->max('rain')->value()->status);
+            $wx->close();
+            $this->clock->advance(7200);
+            $wx = new Weather($this->config, clock: $this->clock);
+            $stale = $wx->on('2024-01-01')->sum('rain')->value();
+            self::assertSame(8.0, $stale->raw);
+            self::assertSame('stale', $stale->status);
+            $wx->close();
+        } finally {
+            $writer->exec('ROLLBACK');
+            $writer->close();
+        }
+    }
+
+    public function testTimestampSeriesKeepsTheArchiveTimezoneThroughTheCache(): void
+    {
+        $series = $this->wx->on('2024-01')->series('outTemp', 'day', 'maxtime')->series();
+        self::assertInstanceOf(Series::class, $series);
+        self::assertSame('2024-01-02 00:00', $series->value(0)->format());
+        $cached = \WeewxPhp\Frontend\ResultCodec::decode(\WeewxPhp\Frontend\ResultCodec::encode($series), 'Europe/Berlin');
+        self::assertInstanceOf(Series::class, $cached);
+        self::assertSame('2024-01-02 00:00', $cached->formatted()[0]['value']);
+        $output = $this->wx->output(new \WeewxPhp\Frontend\Output(units: ['outTemp' => 'degree_F']));
+        try {
+            self::assertSame('unix_epoch', $output->on('2024-01-01')->aggregate('outTemp', 'maxtime')->value()->unit);
+            self::assertSame('count', $output->on('2024-01-01')->count('outTemp')->value()->unit);
+        } finally {
+            $output->close();
+        }
+    }
+
     private string $dir;
     private Config $config;
     private ArchiveDb $db;

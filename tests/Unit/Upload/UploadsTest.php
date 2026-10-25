@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Upload;
@@ -31,6 +33,40 @@ use WeewxPhp\Weewx\UnitSystem;
 
 final class UploadsTest extends TestCase
 {
+    public function testInfluxAndForcedReplaysKeepRecordsOlderThanThePublicHorizon(): void
+    {
+        $this->records(4);
+        $this->clock->advance(3 * 86400);
+        $this->state->noteUploadRun('influx', self::T0, 1, self::T0 + 300, 'seeded');
+        $this->state->noteUploadRun('wu', self::T0, 1, self::T0 + 300, 'seeded');
+        $influx = UploadConfigs::config(Kind::Influx, ['url' => 'https://influx.example', 'bucket' => 'weather', 'token' => 't'], id: 'influx');
+        $uploads = $this->uploads([$influx, $this->wu()]);
+        $archivers = $this->archivers();
+        try {
+            $result = $uploads->run(Budget::unlimited($this->clock), $archivers, $this->clock->now(), only: ['influx']);
+            self::assertSame(3, $result['influx']['sent']);
+            $result = $uploads->run(Budget::unlimited($this->clock), $archivers, $this->clock->now(), forced: true, only: ['wu']);
+            self::assertSame(3, $result['wu']['sent']);
+        } finally {
+            $this->close($archivers);
+        }
+    }
+
+    public function testPermanentRefusalPreservesRecordsAlreadyAccepted(): void
+    {
+        $this->records(3);
+        $this->state->rewindUpload('wu', self::T0);
+        $this->http->answer(200, 'success')->answer(200, 'INVALIDPASSWORDID');
+        $archivers = $this->archivers();
+        try {
+            $result = $this->uploads([$this->wu()])->run(Budget::unlimited($this->clock), $archivers, $this->clock->now());
+            self::assertTrue($result['wu']['blocked']);
+            self::assertSame(self::T0 + 300, $this->state->upload('wu')->through);
+        } finally {
+            $this->close($archivers);
+        }
+    }
+
     /** 2026-08-26 10:50:00 in Berlin, on a five-minute boundary. */
     private const T0 = 1_787_734_200;
 

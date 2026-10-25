@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {subscribe, feedURL} from '../public/assets/feed-client.js';
@@ -70,4 +72,34 @@ test('shared polling, ETags, visibility, retry, timeout and cleanup', async t =>
     assert.throws(() => feedURL('javascript:alert(1)'), /Invalid/);
     assert.throws(() => feedURL('https://secret:password@station.example/'), /Invalid/);
     assert.equal(feedURL('/api#fragment'), 'https://blog.example/api');
+});
+
+test('widget language follows its attribute and page with an English fallback', async t => {
+    const original = {document: globalThis.document, HTMLElement: globalThis.HTMLElement, customElements: globalThis.customElements};
+    t.after(() => Object.assign(globalThis, original));
+    class Element {
+        children = [];
+        attributes = {api: 'ftp://invalid/'};
+        append(...children) { this.children.push(...children); }
+        replaceChildren(...children) { this.children = children; }
+        setAttribute() {}
+        getAttribute(name) { return this.attributes[name] || null; }
+        closest() { return null; }
+        attachShadow() { return this.shadowRoot = new Element(); }
+    }
+    let Widget;
+    globalThis.HTMLElement = Element;
+    globalThis.customElements = {get() {}, define(name, type) { Widget = type; }};
+    globalThis.document = {baseURI: 'https://station.example/', documentElement: {lang: 'de'}, createElement: () => new Element()};
+    await import('../public/assets/weather-widget.js');
+    const widget = new Widget();
+    const status = () => widget.shadowRoot.children[1].children[2].textContent;
+    widget.start();
+    assert.equal(status(), 'Ungültige API-Adresse');
+    widget.attributes.lang = 'en';
+    widget.start();
+    assert.equal(status(), 'Invalid API address');
+    widget.attributes.lang = 'fr';
+    widget.start();
+    assert.equal(status(), 'Invalid API address');
 });

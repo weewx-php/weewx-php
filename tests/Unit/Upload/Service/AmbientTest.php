@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Upload\Service;
@@ -14,6 +16,14 @@ use WeewxPhp\Weewx\Units;
 
 final class AmbientTest extends TestCase
 {
+    public function testProxyErrorsAreTemporaryAndBodyRejectionsMatchWholeLines(): void
+    {
+        $http = (new FakeHttpClient())->answer(503, 'ERROR invalid upstream')->answer(200, '<html>invalid proxy template</html>');
+        $upload = new Ambient(Uploads::config(Kind::Wunderground, ['station' => 'S', 'password' => 'p']), $http);
+        self::assertCount(1, $upload->post([Uploads::metricRecord()])->failures);
+        self::assertSame(1, $upload->post([Uploads::metricRecord()])->sent);
+    }
+
     public function testTheQueryIsWeewxsParameterForParameterInUsUnits(): void
     {
         $http = new FakeHttpClient();

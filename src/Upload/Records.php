@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Upload;
@@ -26,11 +28,7 @@ use WeewxPhp\Weewx\Intervals;
  */
 final class Records
 {
-    /**
-     * How far back a catch-up reaches, whatever the limit says. A station
-     * off for a month should come back and post the current reading, not
-     * two weeks of history nobody is waiting for.
-     */
+    /** How far back public weather services catch up during automatic runs. */
     public const HORIZON = 6 * 3600;
 
     public function __construct(

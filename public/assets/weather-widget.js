@@ -1,15 +1,19 @@
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 import {feedURL, subscribe} from './feed-client.js';
 
-const statusText = {ready: '', stale: 'Veraltet', pending: 'Ausstehend', unavailable: 'Keine Daten'};
+import {weatherText} from './weather-locales.js';
 
 class WeatherWidget extends HTMLElement {
-    static observedAttributes = ['api', 'fields', 'title'];
+    static observedAttributes = ['api', 'fields', 'title', 'lang'];
     connectedCallback() { this.start(); }
     disconnectedCallback() { this.stop?.(); }
     attributeChangedCallback() { if (this.isConnected) this.start(); }
 
     start() {
         this.stop?.();
+        const locale = this.getAttribute('lang') || this.closest('[lang]')?.lang || document.documentElement.lang || 'en';
+        const text = weatherText(locale);
         const root = this.shadowRoot || this.attachShadow({mode: 'open'});
         root.replaceChildren();
         const style = document.createElement('link');
@@ -20,7 +24,7 @@ class WeatherWidget extends HTMLElement {
         const list = document.createElement('dl');
         const status = document.createElement('p');
         status.setAttribute('role', 'status');
-        status.textContent = 'Laden …';
+        status.textContent = text.loading;
         box.append(title, list, status);
         root.append(style, box);
         try {
@@ -29,7 +33,7 @@ class WeatherWidget extends HTMLElement {
             if (selection) url.searchParams.set('fields', selection);
             this.stop = subscribe(url.href, (feed, error) => {
                 if (feed) {
-                    title.textContent = this.getAttribute('title') || feed.title || 'Wetter';
+                    title.textContent = this.getAttribute('title') || feed.title || text.weather;
                     list.replaceChildren();
                     for (const value of Object.values(feed.data)) {
                         if (!value || value.type !== 'value') continue;
@@ -38,24 +42,24 @@ class WeatherWidget extends HTMLElement {
                         const description = document.createElement('dd');
                         const number = document.createElement('strong');
                         const stamp = document.createElement('small');
-                        term.textContent = String(value.label || 'Wert');
+                        term.textContent = String(value.label || text.value);
                         number.textContent = typeof value.formatted === 'string' ? value.formatted : '—';
-                        const date = typeof value.asOf === 'number' ? new Intl.DateTimeFormat('de-DE', {
+                        const date = typeof value.asOf === 'number' ? new Intl.DateTimeFormat(locale, {
                             timeZone: feed.timezone || 'UTC', day: '2-digit', month: '2-digit', year: 'numeric',
                             hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short',
                         }).format(new Date(value.asOf * 1000)) : '';
-                        stamp.textContent = [{live: 'Live', archive: 'Archiv', astronomy: 'Astronomie'}[value.source] || '', date,
-                            statusText[value.status] || ''].filter(Boolean).join(' · ');
+                        stamp.textContent = [text[value.source] || '', date,
+                            text[value.status] || ''].filter(Boolean).join(' · ');
                         description.append(number, stamp);
                         row.append(term, description);
                         list.append(row);
                     }
                 }
-                status.textContent = error ? 'Verbindung unterbrochen' : '';
+                status.textContent = error ? text.disconnected : '';
                 status.hidden = !error;
             });
         } catch {
-            status.textContent = 'Ungültige API-Adresse';
+            status.textContent = text.invalidAPI;
         }
     }
 }

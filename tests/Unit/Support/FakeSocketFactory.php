@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Support;
@@ -11,7 +13,7 @@ use WeewxPhp\Upload\Rejected;
 /** Hands out the connections a test queued, and remembers where each was asked to go. */
 final class FakeSocketFactory implements SocketFactory
 {
-    /** @var list<array{host: string, port: int, tls: bool, verify: bool, timeout: int}> */
+    /** @var list<array{host: string, port: int, tls: bool, verify: bool, timeout: int|float}> */
     public array $opened = [];
 
     /** @var list<FakeConnection|Rejected> */
@@ -23,7 +25,7 @@ final class FakeSocketFactory implements SocketFactory
         return $this;
     }
 
-    public function open(string $host, int $port, bool $tls, bool $verify, int $timeout): Connection
+    public function open(string $host, int $port, bool $tls, bool $verify, int|float $timeout): Connection
     {
         $this->opened[] = ['host' => $host, 'port' => $port, 'tls' => $tls, 'verify' => $verify, 'timeout' => $timeout];
         $next = array_shift($this->queue) ?? new Rejected(sprintf('fake: nothing listens on %s:%d', $host, $port));

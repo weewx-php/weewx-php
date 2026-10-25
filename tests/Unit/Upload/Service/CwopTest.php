@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Upload\Service;
@@ -17,6 +19,18 @@ use WeewxPhp\Weewx\Units;
 
 final class CwopTest extends TestCase
 {
+    public function testOneSecondTimeoutStillConnectsAndUploads(): void
+    {
+        $sockets = (new FakeSocketFactory())->queue(new FakeConnection("# ready\r\n"));
+        $upload = new Cwop(Uploads::config(Kind::Cwop, ['station' => 'DW1234'], timeout: 1), 48.0, 11.0, $sockets);
+
+        $posted = $upload->post([Uploads::metricRecord()]);
+        self::assertSame(1, $posted->sent);
+        self::assertCount(1, $sockets->opened);
+        self::assertGreaterThan(0, $sockets->opened[0]['timeout']);
+        self::assertLessThanOrEqual(1, $sockets->opened[0]['timeout']);
+    }
+
     public function testThePacketIsWeewxsCharacterForCharacter(): void
     {
         $upload = $this->cwop();
@@ -55,6 +69,7 @@ final class CwopTest extends TestCase
 
     public function testPositionsAreDegreesAndDecimalMinutes(): void
     {
+        self::assertSame('4900.00N', Cwop::latlon(48.999999, ['N', 'S'], true));
         self::assertSame('4827.58N', Cwop::latlon(48.4596, ['N', 'S'], true));
         self::assertSame('01139.23E', Cwop::latlon(11.6539, ['E', 'W'], false));
         self::assertSame('2218.00S', Cwop::latlon(-22.3, ['N', 'S'], true));

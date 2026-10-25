@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Frontend;
@@ -16,6 +18,27 @@ use WeewxPhp\Tests\Support\TempDir;
 
 final class CacheTest extends TestCase
 {
+    public function testOldUnownedRequestsArePrunedBeforeTheLimit(): void
+    {
+        $dir = TempDir::create('cache-prune');
+        $cache = new Cache(Archives::settings($dir));
+        try {
+            $pinned = $cache->register('a', new Spec(observation: 'rain'), 100, true);
+            $owned = $cache->sync('theme', ['temperature' => ['archive' => 'a', 'spec' => new Spec()]], 100)['temperature'];
+            for ($i = 0; $i < Cache::MAX_REQUESTS - 2; ++$i) {
+                $cache->register('a', new Spec(period: 'between', start: $i, end: $i + 1), 100);
+            }
+            $fresh = $cache->register('a', new Spec(observation: 'windSpeed'), 100 + 31 * 86400);
+            self::assertCount(3, $cache->status());
+            foreach ([$pinned, $owned, $fresh] as $id) {
+                self::assertNotNull($cache->request($id));
+            }
+        } finally {
+            $cache->close();
+            TempDir::remove($dir);
+        }
+    }
+
     public function testPhpPrecisionDoesNotInvalidateConfigurationOrChangeQueryIdentity(): void
     {
         $dir = TempDir::create('cache-precision');

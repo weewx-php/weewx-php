@@ -1,11 +1,14 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Frontend;
 
 use WeewxPhp\Config\ArchiveConfig;
 use WeewxPhp\Config\Config;
+use WeewxPhp\Db\DbError;
 use WeewxPhp\Time\Clock;
 use WeewxPhp\Time\SystemClock;
 use WeewxPhp\Version;
@@ -16,6 +19,7 @@ final class Weather
 {
     private ?ArchiveReader $reader = null;
     private ?Cache $cache = null;
+    private bool $cacheObserved = false;
     private ?\WeewxPhp\Extension\Registry $extensions = null;
     /** @var array<string, Value|Series|Report> */
     private array $memo = [];
@@ -263,7 +267,10 @@ final class Weather
     {
         Catalog::identifier($observation);
         [$unit, $group] = Units::unitOf($this->reader()->units, $observation, $this->archiveConfig->groups());
-        $target = $this->outputProfile->units[$observation] ?? $this->outputProfile->units[$group ?? ''] ?? $unit;
+        $target = $this->outputProfile->units[$observation] ?? null;
+        if ($target === null || $unit === null || !Units::canConvert($unit, $target)) {
+            $target = $this->outputProfile->units[$group ?? ''] ?? $unit;
+        }
         if ($target !== null) {
             (new Value(null, $unit, $group))->to($target);
         }
@@ -414,6 +421,33 @@ final class Weather
 
     public function execute(Spec $spec): Value|Series|Report
     {
+        try {
+            return $this->executeCached($spec);
+        } catch (DbError $error) {
+            if (!self::busy($error)) {
+                throw $error;
+            }
+            $saved = null;
+            try {
+                $saved = $this->cache?->request(Cache::key($this->archiveConfig->id, $spec));
+            } catch (DbError $readError) {
+                if (!self::busy($readError)) {
+                    throw $readError;
+                }
+            }
+            return is_string($saved['payload'] ?? null)
+                ? ResultCodec::decode($saved['payload'], $this->archiveConfig->timezone->getName(), 'stale')
+                : $this->placeholder($spec);
+        }
+    }
+
+    private static function busy(DbError $error): bool
+    {
+        return str_contains($error->getMessage(), 'database is locked') || str_contains($error->getMessage(), 'database table is locked');
+    }
+
+    private function executeCached(Spec $spec): Value|Series|Report
+    {
         $spec->validate();
         $this->budget->resetSources();
         $before = $this->budget->snapshot();
@@ -500,9 +534,10 @@ final class Weather
 
     private function cache(): Cache
     {
-        if ($this->cache === null) {
-            $this->cache = new Cache($this->config->settings);
+        $this->cache ??= new Cache($this->config->settings);
+        if (!$this->cacheObserved) {
             $this->cache->observe($this->archiveConfig);
+            $this->cacheObserved = true;
         }
         return $this->cache;
     }
@@ -518,6 +553,7 @@ final class Weather
         $this->cache?->close();
         $this->reader = null;
         $this->cache = null;
+        $this->cacheObserved = false;
     }
 
     public function __destruct()

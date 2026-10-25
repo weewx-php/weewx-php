@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Upload\Service;
@@ -160,10 +162,10 @@ final class Cwop implements Upload
      */
     public static function latlon(float $value, array $hemispheres, bool $latitude): string
     {
-        $magnitude = abs($value);
-        $degrees = floor($magnitude);
-        $minutes = ($magnitude - $degrees) * 60.0;
-        return sprintf($latitude ? '%02d' : '%03d', (int) $degrees)
+        $hundredths = (int) round(abs($value) * 6000);
+        $degrees = intdiv($hundredths, 6000);
+        $minutes = ($hundredths % 6000) / 100;
+        return sprintf($latitude ? '%02d' : '%03d', $degrees)
             . sprintf('%05.2f', $minutes)
             . ($value >= 0 ? $hemispheres[0] : $hemispheres[1]);
     }
@@ -197,9 +199,10 @@ final class Cwop implements Upload
     public function check(): string
     {
         $last = '';
+        $deadline = (hrtime(true) / 1_000_000_000) + $this->timeout;
         foreach ($this->servers as [$host, $port]) {
             try {
-                $connection = $this->sockets->open($host, $port, false, false, $this->timeout);
+                $connection = $this->sockets->open($host, $port, false, false, $this->remaining($deadline));
                 try {
                     $connection->write($this->login());
                     $banner = trim($connection->readSome(1024));
@@ -231,9 +234,10 @@ final class Cwop implements Upload
     private function send(string $packet): string
     {
         $last = '';
+        $deadline = (hrtime(true) / 1_000_000_000) + $this->timeout;
         foreach ($this->servers as [$host, $port]) {
             try {
-                $connection = $this->sockets->open($host, $port, false, false, $this->timeout);
+                $connection = $this->sockets->open($host, $port, false, false, $this->remaining($deadline));
                 try {
                     $connection->write($this->login());
                     // APRS-IS answers the login with a banner. It is read before
@@ -251,6 +255,15 @@ final class Cwop implements Upload
             }
         }
         throw new Rejected('no CWOP server answered: ' . $last);
+    }
+
+    private function remaining(float $deadline): float
+    {
+        $left = $deadline - (hrtime(true) / 1_000_000_000);
+        if ($left <= 0) {
+            throw new Rejected('CWOP deadline reached');
+        }
+        return $left;
     }
 
     /**

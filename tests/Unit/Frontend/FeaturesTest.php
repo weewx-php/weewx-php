@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Frontend;
@@ -33,6 +35,21 @@ use WeewxPhp\Weewx\UnitSystem;
 
 final class FeaturesTest extends TestCase
 {
+    public function testSeriesAnalysisRetainsGermanOutputAndHardwareFallback(): void
+    {
+        $point = ['start' => $this->ts('2024-09-01'), 'end' => $this->ts('2024-10-01'), 'value' => 12.3, 'coverage' => 1.0];
+        $series = new Series([$point], 'mm', 'group_rain', output: new Output('de'), observation: 'rain', fallback: [$point], timezone: 'Europe/Berlin');
+        self::assertSame('12,3 mm', $series->rank()->value(0)->format());
+        self::assertSame('12,3 mm', $series->calendarMonth(9, 'Europe/Berlin')->value(0)->format());
+        self::assertSame([$point], $series->rank()->fallback);
+        self::assertSame([$point], $series->calendarMonth(9, 'Europe/Berlin')->fallback);
+        self::assertSame('12,3 mm', $series->quantile(0.5)->format());
+        self::assertSame('12,3 mm', $series->compare(new Value(24.6, 'mm', 'group_rain'))['difference']->format());
+        $theme = new \WeewxPhp\Frontend\Theme(language: 'de');
+        self::assertSame('März', $theme->tags($this->ts('2024-03-15'), 'Europe/Berlin')['month_name']);
+        self::assertSame('Zunehmende Sichel', (new Value('Waxing crescent', output: new Output('de'), observation: 'moon_phase'))->format());
+    }
+
     private string $dir;
     private Config $config;
     private ArchiveDb $db;

@@ -1,10 +1,11 @@
 <!doctype html>
+<!-- Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com> -->
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Weather widget</title>
-<!-- Copy weather-widget.js, weather-widget.css and feed-client.js from public/assets
-     to ./weather-assets/ on this site. Replace the API origin below. -->
+<!-- Copy weather-widget.js, weather-widget.css, feed-client.js and weather-locales.js
+     from public/assets to ./weather-assets/ on this site. Replace the API origin below. -->
 <script type="module" src="./weather-assets/weather-widget.js"></script>
 <weewx-weather api="https://wetter.example.org/api/v1.php?feed=live"
     fields="temperature,humidity,wind" title="Weather"></weewx-weather>

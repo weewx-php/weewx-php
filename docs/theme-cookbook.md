@@ -1,5 +1,7 @@
 # Theme cookbook: PHP tags, Apache ECharts, API and WordPress
 
+<!-- Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com> -->
+
 This cookbook takes you from your first PHP theme to an embedded live widget.
 The examples use the existing frontend layer, which provides WeeWX/xaggs
 aggregates, astronomy queries, cacheable comparisons and explicit live values.
@@ -889,7 +891,7 @@ values in the feed. This small widget does not render chart series.
 API headers alone are not enough. Nginx example in the weather virtual host:
 
 ```nginx
-location ~ ^/assets/(weather-widget\.js|feed-client\.js|weather-widget\.css)$ {
+location ~ ^/assets/(weather-widget\.js|feed-client\.js|weather-locales\.js|weather-widget\.css)$ {
     add_header Access-Control-Allow-Origin "*" always;
     add_header X-Content-Type-Options nosniff always;
     try_files $uri =404;
@@ -903,8 +905,8 @@ use HTTPS URLs for all weather resources too.
 
 ### Assets on the embedding website
 
-Alternatively, copy three files to your own directory:
-`weather-widget.js`, `feed-client.js`, `weather-widget.css`. Preserve their
+Alternatively, copy these files to your own directory:
+`weather-widget.js`, `feed-client.js`, `weather-locales.js`, `weather-widget.css`. Preserve their
 relative paths to one another. Then change only the script path:
 
 ```html

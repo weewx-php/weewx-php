@@ -1,9 +1,12 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Upload\Http;
 
+use WeewxPhp\Upload\Net\Dns;
 use WeewxPhp\Upload\Rejected;
 use WeewxPhp\Version;
 
@@ -36,9 +39,10 @@ final class StreamClient implements HttpClient
         if ($body === false) {
             $error = error_get_last();
             $message = $error === null ? 'no answer' : $error['message'];
+            $message = str_replace($request->url, $request->masked(), $message);
             throw new Rejected(
                 sprintf('%s: %s', $request->masked(), $message),
-                permanent: str_contains($message, 'getaddrinfo') || str_contains($message, 'Name or service not known'),
+                permanent: Dns::missing($message),
             );
         }
         $status = 0;
