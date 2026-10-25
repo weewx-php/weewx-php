@@ -694,6 +694,7 @@ final class Archiver
                             continue;
                         }
                         $this->archive->addRecord($built->record, replace: true, updateDaily: false);
+                        $this->archive->storeRainEvidence($built);
                         $builts[] = $built;
                     }
                     $this->archive->rebuildDay($sod);

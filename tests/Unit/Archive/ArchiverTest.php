@@ -459,6 +459,40 @@ final class ArchiverTest extends TestCase
         }
     }
 
+    public function testRebuildReplacesObsoleteRainEvidence(): void
+    {
+        $this->add(self::T0 - 30, ['dayRain' => 1.0]);
+        $this->add(self::T0 + 20, ['dayRain' => 1.2]);
+        $archiver = $this->archiver();
+        try {
+            $built = $archiver->build(self::T0 + 300);
+            self::assertNotNull($built);
+            $legacy = new \WeewxPhp\Archive\Built(
+                $built->stop,
+                $built->seconds,
+                ['rain' => null] + $built->record,
+                $built->accumulator,
+                $built->packets,
+                $built->fromHardware,
+                $built->dropped,
+                [['start' => self::T0 - 30, 'stop' => self::T0 + 20, 'amount' => null,
+                    'status' => 'conflict', 'counter' => 'dayRain', 'source' => 'ecowitt']],
+            );
+            self::assertTrue($archiver->store($legacy));
+            $reader = \WeewxPhp\Db\Sqlite::readOnly($archiver->config()->database);
+            try {
+                self::assertSame(1, $reader->scalar('SELECT COUNT(*) FROM weewx_rain_evidence'));
+                self::assertSame(1, $archiver->rebuild(self::T0, self::T0 + 300));
+                self::assertSame(0, $reader->scalar('SELECT COUNT(*) FROM weewx_rain_evidence'));
+                self::assertEqualsWithDelta(0.2, $reader->scalar('SELECT SUM(rain) FROM archive'), 1e-12);
+            } finally {
+                $reader->close();
+            }
+        } finally {
+            $archiver->close();
+        }
+    }
+
     // -- helpers ----------------------------------------------------------
 
     private function archiver(?ArchiveConfig $config = null): Archiver
