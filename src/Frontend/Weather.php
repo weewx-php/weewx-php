@@ -1,11 +1,14 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Frontend;
 
 use WeewxPhp\Config\ArchiveConfig;
 use WeewxPhp\Config\Config;
+use WeewxPhp\Db\DbError;
 use WeewxPhp\Time\Clock;
 use WeewxPhp\Time\SystemClock;
 use WeewxPhp\Version;
@@ -413,6 +416,33 @@ final class Weather
     }
 
     public function execute(Spec $spec): Value|Series|Report
+    {
+        try {
+            return $this->executeCached($spec);
+        } catch (DbError $error) {
+            if (!self::busy($error)) {
+                throw $error;
+            }
+            $saved = null;
+            try {
+                $saved = $this->cache?->request(Cache::key($this->archiveConfig->id, $spec));
+            } catch (DbError $readError) {
+                if (!self::busy($readError)) {
+                    throw $readError;
+                }
+            }
+            return is_string($saved['payload'] ?? null)
+                ? ResultCodec::decode($saved['payload'], $this->archiveConfig->timezone->getName(), 'stale')
+                : $this->placeholder($spec);
+        }
+    }
+
+    private static function busy(DbError $error): bool
+    {
+        return str_contains($error->getMessage(), 'database is locked') || str_contains($error->getMessage(), 'database table is locked');
+    }
+
+    private function executeCached(Spec $spec): Value|Series|Report
     {
         $spec->validate();
         $this->budget->resetSources();

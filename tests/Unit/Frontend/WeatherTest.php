@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tests\Frontend;
@@ -30,6 +32,30 @@ use WeewxPhp\Weewx\Policy;
 
 final class WeatherTest extends TestCase
 {
+    public function testPagesReadCachedAndPendingQueriesWhileAWriterHoldsTheLock(): void
+    {
+        $query = $this->wx->on('2024-01-01')->sum('rain');
+        self::assertSame(8.0, $query->raw());
+        $this->wx->close();
+        $writer = new \SQLite3(Cache::path($this->config->settings));
+        $writer->exec('BEGIN IMMEDIATE');
+        try {
+            $wx = new Weather($this->config, clock: $this->clock);
+            self::assertSame('ready', $wx->on('2024-01-01')->sum('rain')->value()->status);
+            self::assertSame('pending', $wx->on('2024-01-01')->max('rain')->value()->status);
+            $wx->close();
+            $this->clock->advance(7200);
+            $wx = new Weather($this->config, clock: $this->clock);
+            $stale = $wx->on('2024-01-01')->sum('rain')->value();
+            self::assertSame(8.0, $stale->raw);
+            self::assertSame('stale', $stale->status);
+            $wx->close();
+        } finally {
+            $writer->exec('ROLLBACK');
+            $writer->close();
+        }
+    }
+
     private string $dir;
     private Config $config;
     private ArchiveDb $db;

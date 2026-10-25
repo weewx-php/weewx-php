@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Frontend;
@@ -12,6 +14,8 @@ final class Computation
 {
     private int $index = 0;
     private ?int $cursor = null;
+    private ?int $readThrough = null;
+    private ?bool $daily = null;
     private ?int $measuredAt = null;
     private Accumulator $stats;
     /** @var list<array{start: int, end: int, value: int|float|bool|string|Vector|null, coverage: float|null}> */
@@ -171,7 +175,7 @@ final class Computation
         $historical = str_starts_with($spec->aggregate, 'historical_');
         $degrees = in_array($spec->observation, ['heatdeg', 'cooldeg', 'growdeg'], true);
         $obs = $degrees ? 'outTemp' : ($spec->observation === 'windvec' && in_array($spec->aggregate, ['avg', 'not_null', 'has_data'], true) ? 'wind' : $spec->observation);
-        $daily = $this->usesDaily($span, $obs, $budget);
+        $daily = $this->daily ??= $this->usesDaily($span, $obs, $budget);
         if ((in_array($spec->aggregate, Catalog::DAILY, true) || $historical || $degrees) && !$daily) {
             throw new QueryError('This aggregate needs daily summaries and calendar-day boundaries');
         }
@@ -242,6 +246,7 @@ final class Computation
                 $row = $this->reader->derive($row, $spec->observation);
             }
             $this->cursor = $stamp;
+            $this->readThrough = $daily ? Intervals::endOfDay($stamp, $this->reader->config->timezone) : $stamp;
             if ($historical && Span::date($stamp, $this->reader->config->timezone)->format('m-d') !== Span::date($span->start, $this->reader->config->timezone)->format('m-d')) {
                 continue;
             }
@@ -330,6 +335,7 @@ final class Computation
         foreach ($history->rows($obs, $day, $end, $this->dailyCursor ?? $day, $budget) as $row) {
             $this->dailyStats->add($row, false, $inner, null);
             $this->dailyCursor = Cache::integer($row['dateTime']);
+            $this->readThrough = max($this->readThrough ?? $day, $this->dailyCursor);
             ++$count;
         }
         if ($count === 512) {
@@ -452,10 +458,12 @@ final class Computation
 
     private function point(Span $span, int|float|bool|string|Vector|null $value, ?float $coverage): void
     {
+        $this->readThrough = max($this->readThrough ?? $span->start, $span->end);
         $this->rainCoveredThrough = null;
         $this->points[] = ['start' => $span->start, 'end' => $span->end, 'value' => $value, 'coverage' => $coverage];
         ++$this->index;
         $this->cursor = null;
+        $this->daily = null;
         $this->stats = new Accumulator();
     }
 
@@ -490,7 +498,7 @@ final class Computation
 
     public function save(): string
     {
-        return json_encode(['measuredAt' => $this->measuredAt, 'asOf' => $this->asOf, 'index' => $this->index, 'cursor' => $this->cursor, 'stats' => $this->stats->save(), 'points' => $this->points,
+        return json_encode(['daily' => $this->daily, 'readThrough' => $this->readThrough, 'measuredAt' => $this->measuredAt, 'asOf' => $this->asOf, 'index' => $this->index, 'cursor' => $this->cursor, 'stats' => $this->stats->save(), 'points' => $this->points,
             'fallback' => $this->fallback, 'fallbackCursor' => $this->fallbackCursor, 'fallbackDone' => $this->fallbackDone,
             'dailyCursor' => $this->dailyCursor, 'dailyStats' => $this->dailyStats?->save(),
             'rainCoveredThrough' => $this->rainCoveredThrough], JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION);
@@ -506,6 +514,8 @@ final class Computation
         $work->measuredAt = is_int($state['measuredAt'] ?? null) ? $state['measuredAt'] : null;
         $work->index = $state['index'];
         $work->cursor = is_int($state['cursor'] ?? null) ? $state['cursor'] : null;
+        $work->readThrough = is_int($state['readThrough'] ?? null) ? $state['readThrough'] : null;
+        $work->daily = is_bool($state['daily'] ?? null) ? $state['daily'] : null;
         $work->stats = Accumulator::restore($state['stats']);
         $work->points = ResultCodec::points($state['points']);
         $work->fallback = is_array($state['fallback'] ?? null) ? ResultCodec::points($state['fallback']) : [];
