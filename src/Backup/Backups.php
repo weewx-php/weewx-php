@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Backup;
@@ -137,7 +139,11 @@ final class Backups
                 try {
                     $name = $this->create($runtime, $now, $snapshotReady);
                     $db->exec("UPDATE backup_status SET completed = ?, status = 'complete', filename = ?, requested = 0 WHERE id = 1", [$now, $name]);
-                    $this->prune($now, $name);
+                    try {
+                        $this->prune($now, $name);
+                    } catch (Throwable $error) {
+                        $runtime->log->warning('backup retention failed (' . $error::class . ')');
+                    }
                     $runtime->log->info('backup complete: ' . $name);
                     return ['status' => 'complete', 'completed' => $now, 'filename' => $name];
                 } catch (Throwable $error) {
