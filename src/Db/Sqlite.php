@@ -26,7 +26,7 @@ final class Sqlite
 {
     private int $depth = 0;
 
-    private function __construct(private readonly SQLite3 $connection, private readonly string $path) {}
+    private function __construct(private readonly SQLite3 $connection, private readonly string $path, private readonly int $busyTimeout) {}
 
     /**
      * @param bool $create Whether a missing file may be created; without it a missing file is an error.
@@ -55,9 +55,14 @@ final class Sqlite
         // want the same file at the same moment, and neither should give up
         // on a lock that lasts milliseconds.
         $connection->busyTimeout($busyTimeout);
-        $db = new self($connection, $path);
-        $db->exec('PRAGMA journal_mode=' . strtoupper($journalMode->value));
-        $db->exec('PRAGMA synchronous=' . $synchronous);
+        $db = new self($connection, $path, $busyTimeout);
+        try {
+            $db->retryBusy(fn(): int => $db->exec('PRAGMA journal_mode=' . strtoupper($journalMode->value)));
+            $db->exec('PRAGMA synchronous=' . $synchronous);
+        } catch (Throwable $error) {
+            $connection->close();
+            throw $error;
+        }
         return $db;
     }
 
@@ -74,7 +79,7 @@ final class Sqlite
         $connection = new SQLite3($path, SQLITE3_OPEN_READONLY);
         $connection->enableExceptions(true);
         $connection->busyTimeout(100);
-        return new self($connection, $path);
+        return new self($connection, $path, 100);
     }
 
     /**
@@ -269,7 +274,7 @@ final class Sqlite
     /** @param list<int|float|string|bool|null> $params */
     private function prepare(string $sql, array $params): SQLite3Stmt
     {
-        $statement = $this->guard(fn() => $this->connection->prepare($sql), $sql);
+        $statement = $this->retryBusy(fn() => $this->guard(fn() => $this->connection->prepare($sql), $sql));
         if ($statement === false) {
             throw new DbError(sprintf('Cannot prepare: %s', $sql));
         }
@@ -284,6 +289,41 @@ final class Sqlite
             $statement->bindValue($index + 1, is_bool($value) ? (int) $value : $value, $type);
         }
         return $statement;
+    }
+
+    /**
+     * SQLite may skip its busy handler during WAL startup or a journal-mode
+     * change. Retry only operations that cannot have applied application writes,
+     * within the connection's original timeout. HTTP ingest keeps its zero wait.
+     *
+     * @template T
+     * @param callable(): T $call
+     * @return T
+     */
+    private function retryBusy(callable $call): mixed
+    {
+        $deadline = hrtime(true) + $this->busyTimeout * 1_000_000;
+        $retried = false;
+        try {
+            while (true) {
+                try {
+                    return $call();
+                } catch (Throwable $error) {
+                    $remaining = ($deadline - hrtime(true)) / 1_000_000;
+                    // A busy snapshot inside a transaction needs a rollback, not a retry.
+                    if (($this->connection->lastErrorCode() & 0xff) !== 5 || $remaining <= 0 || $this->depth > 0) {
+                        throw $error;
+                    }
+                    usleep((int) min(10000, $remaining * 1000));
+                    $this->connection->busyTimeout(max(0, (int) (($deadline - hrtime(true)) / 1_000_000)));
+                    $retried = true;
+                }
+            }
+        } finally {
+            if ($retried) {
+                $this->connection->busyTimeout($this->busyTimeout);
+            }
+        }
     }
 
     /**

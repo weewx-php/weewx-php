@@ -35,8 +35,13 @@ final class ExecutionProfile
         if ($sameHostLimit && ($saved['active'] ?? false) === true) {
             $last = self::number($saved['elapsed'] ?? null);
             $attempted = self::number($saved['seconds'] ?? null);
-            $this->ceiling = max(1.0, min($attempted * 0.7, $last > 1 ? $last * 0.8 : $attempted * 0.5));
-            $log->warning(sprintf('runtime %s: previous process interrupted; safe runtime reduced to %.1f s (host limit not proven)', $name, $this->ceiling));
+            // An early crash or restart supplies no useful runtime measurement.
+            if ($last >= 1.0) {
+                $this->ceiling = max(1.0, min($attempted * 0.7, $last * 0.8));
+                $log->warning(sprintf('runtime %s: previous process interrupted; safe runtime reduced to %.1f s (host limit not proven)', $name, $this->ceiling));
+            } else {
+                $log->warning(sprintf('runtime %s: previous process interrupted before one second of progress; budget unchanged', $name));
+            }
         }
         $initial = $configured > 0 || $phpLimit > 0 ? $this->maximum : 20.0;
         $this->seconds = max(0.0, min($this->maximum, $next > 0 ? $next : $initial, $this->ceiling > 0 ? $this->ceiling : INF));
@@ -71,7 +76,10 @@ final class ExecutionProfile
     {
         $elapsed = $this->clock->monotonic() - $this->started;
         $next = $this->seconds;
-        if ($exhausted && $elapsed >= $this->seconds * 0.9 && $this->ceiling === 0.0) {
+        if ($exhausted && $elapsed >= $this->seconds * 0.9) {
+            // A completed full window permits gradual recovery after an interruption,
+            // including profiles persisted by versions that kept a permanent ceiling.
+            $this->ceiling = 0.0;
             $next = min($this->maximum, max($next + 1, $next * 1.25));
         }
         $this->save(false, $next);

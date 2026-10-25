@@ -107,4 +107,56 @@ final class SqliteTest extends TestCase
         $this->expectExceptionMessage('SELECT nothing FROM nowhere');
         $db->one('SELECT nothing FROM nowhere');
     }
+
+    public function testOpeningRetriesAJournalModeLockThatBypassesTheBusyHandler(): void
+    {
+        $path = $this->dir . '/journal.sdb';
+        Sqlite::open($path, true, JournalMode::Delete)->close();
+        $holder = $this->dir . '/holder.php';
+        file_put_contents($holder, <<<'PHP'
+            <?php
+            $db = new SQLite3($argv[1]);
+            $db->enableExceptions(true);
+            $db->exec('BEGIN IMMEDIATE');
+            echo "ready\n";
+            flush();
+            usleep(150000);
+            $db->exec('ROLLBACK');
+            $db->close();
+            PHP);
+        $process = proc_open([PHP_BINARY, $holder, $path], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        self::assertIsResource($process);
+        $db = null;
+        try {
+            self::assertSame("ready\n", fgets($pipes[1]));
+            $db = Sqlite::open($path, false, JournalMode::Wal, busyTimeout: 1000);
+            self::assertSame('wal', $db->scalar('PRAGMA journal_mode'));
+            $db->exec('CREATE TABLE saved (value INTEGER)');
+            $db->exec('INSERT INTO saved VALUES (7)');
+            self::assertSame(7, $db->scalar('SELECT value FROM saved'));
+        } finally {
+            $db?->close();
+            foreach ($pipes as $pipe) {
+                fclose($pipe);
+            }
+            self::assertSame(0, proc_close($process));
+        }
+    }
+
+    public function testNonblockingOpenDoesNotRetryAPersistentJournalModeLock(): void
+    {
+        $path = $this->dir . '/busy.sdb';
+        $writer = Sqlite::open($path, true, JournalMode::Delete);
+        $writer->exec('BEGIN IMMEDIATE');
+        $started = hrtime(true);
+        try {
+            $this->expectException(DbError::class);
+            $this->expectExceptionMessage('database is locked');
+            Sqlite::open($path, false, JournalMode::Wal, busyTimeout: 0);
+        } finally {
+            self::assertLessThan(0.25, (hrtime(true) - $started) / 1e9);
+            $writer->exec('ROLLBACK');
+            $writer->close();
+        }
+    }
 }

@@ -56,4 +56,49 @@ final class ExecutionProfileTest extends TestCase
             TempDir::remove($dir);
         }
     }
+
+    public function testAnEarlyInterruptionDoesNotEstablishAHostRuntimeLimit(): void
+    {
+        $dir = TempDir::create('early-interruption');
+        $db = StateDb::open($dir . '/state.sdb', JournalMode::Wal);
+        $clock = new FixedClock(1000);
+        $log = new MemoryLogger();
+        try {
+            $first = new ExecutionProfile($db, $clock, $log, 'archive-cli', 0, 0, 300);
+            $clock->advance(0.2);
+            $first->checkpoint();
+            $next = new ExecutionProfile($db, $clock, $log, 'archive-cli', 0, 0, 300);
+            self::assertSame(20.0, $next->seconds());
+            $next->finish(false);
+        } finally {
+            $db->close();
+            TempDir::remove($dir);
+        }
+    }
+
+    public function testSuccessfulFullWindowsRecoverAnExistingReducedBudget(): void
+    {
+        $dir = TempDir::create('runtime-recovery');
+        $db = StateDb::open($dir . '/state.sdb', JournalMode::Wal);
+        $clock = new FixedClock(1000);
+        $log = new MemoryLogger();
+        try {
+            $db->saveExecutionProfile('archive-cli', ['php_limit' => 0, 'seconds' => 1, 'next' => 1, 'ceiling' => 1, 'active' => false, 'elapsed' => 0.1]);
+            $previous = 1.0;
+            for ($i = 0; $i < 16; ++$i) {
+                $profile = new ExecutionProfile($db, $clock, $log, 'archive-cli', 0, 10, 300);
+                if ($i > 0 && $previous < 10.0) {
+                    self::assertGreaterThan($previous, $profile->seconds());
+                }
+                self::assertLessThanOrEqual(10.0, $profile->seconds());
+                $previous = $profile->seconds();
+                $clock->advance($profile->seconds());
+                $profile->finish(true);
+            }
+            self::assertSame(10.0, $previous);
+        } finally {
+            $db->close();
+            TempDir::remove($dir);
+        }
+    }
 }
