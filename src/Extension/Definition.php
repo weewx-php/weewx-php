@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Extension;
@@ -18,6 +20,7 @@ final class Definition
     {
         $result = [];
         foreach ($section?->sections() ?? [] as $id => $one) {
+            $id = (string) $id;
             if (preg_match('/^[a-z][a-z0-9_]{0,47}$/D', $id) !== 1) {
                 throw new ConfigError('Invalid extension id');
             }

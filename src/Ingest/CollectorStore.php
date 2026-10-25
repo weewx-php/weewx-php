@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Ingest;
@@ -271,7 +273,7 @@ final class CollectorStore
                 );
                 $stored = $this->live->add(
                     $packet,
-                    array_keys($config->archives),
+                    array_map('strval', array_keys($config->archives)),
                     $config->settings->archiveInterval,
                     false,
                     $now,

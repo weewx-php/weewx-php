@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Admin;
@@ -193,6 +195,7 @@ final class Service
         }
         $fields = $one->optionalSection('fields');
         foreach ($fields?->sections() ?? [] as $sender => $unused) {
+            $sender = (string) $sender;
             if (!in_array($sender, $senders, true)) {
                 $fields?->remove($sender);
             }
@@ -365,7 +368,7 @@ final class Service
         $id = Input::text($input, 'archive');
         $archive = $config->archive($id) ?? throw new Problem('error.archive');
         $read = new ReadModel($this->path);
-        $senders = $archive->senders ?? array_keys($config->stations);
+        $senders = $archive->senders ?? array_map('strval', array_keys($config->stations));
         $mapping = new Mapping($archive, $read->primary($archive));
         $schema = ReadModel::archive($archive)['schema'];
         $one = $file->root()->section('Archives')->section($id);

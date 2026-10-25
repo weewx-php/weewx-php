@@ -28,6 +28,51 @@ final class ConfFileTest extends TestCase
         self::assertSame('2025', array_values($config->archives)[0]->id);
         self::assertSame('2025', array_values($config->uploads)[0]->archive);
         self::assertSame('12345', array_values($config->uploads)[0]->text('station'));
+        $dir = TempDir::create('numeric-config');
+        try {
+            $read->root()->set('data_dir', $dir . '/data');
+            $read->root()->section('Archives')->section('2025')->addSection('fields')->addSection('2024')->set('outTemp', 'outTemp');
+            mkdir($dir . '/data');
+            mkdir($dir . '/data/archives');
+            $path = $dir . '/weather.conf';
+            $read->write($path);
+            $model = new \WeewxPhp\Admin\ReadModel($path);
+            $snapshot = \WeewxPhp\Archive\Revisions::snapshot($model->file, $model->config);
+            self::assertStringContainsString('[[2024]]', $snapshot);
+            (new \WeewxPhp\Admin\Service($path, 1788609600))->execute('settings.save', ['revision' => $model->revision, 'backup_retention_days' => '7']);
+            self::assertSame(7, \WeewxPhp\Config\Config::load($path)->settings->backupRetentionDays);
+            $runtime = \WeewxPhp\Tick\Runtime::boot($path, new \WeewxPhp\Time\FixedClock(1788609600), new \WeewxPhp\Log\MemoryLogger());
+            try {
+                $outcome = (new \WeewxPhp\Tick\Tick($runtime))->run('test');
+                self::assertSame('ok', $outcome->status);
+                $result = $outcome->archives['2025'] ?? null;
+                self::assertIsArray($result);
+                self::assertArrayNotHasKey('error', $result);
+            } finally {
+                $runtime->close();
+            }
+            $model = new \WeewxPhp\Admin\ReadModel($path);
+            $page = new \WeewxPhp\Admin\Page($model, new \WeewxPhp\Admin\Translator(), 'csrf');
+            foreach (['archives', 'fields', 'settings'] as $name) {
+                self::assertStringContainsString('<html', $page->render($name, ['archive' => '2025']));
+            }
+            $weather = new \WeewxPhp\Frontend\Weather($model->config);
+            self::assertSame('2025', $weather->configuration()->id);
+            $weather->close();
+        } finally {
+            TempDir::remove($dir);
+        }
+    }
+
+    public function testKeyQuotingDoesNotRestrictUnquotedValues(): void
+    {
+        $value = 'abc\'d"e=f';
+        $file = ConfFile::parse('');
+        $file->root()->set('credential', $value);
+        $file->root()->set('key=value', 'normal');
+        $read = ConfFile::parse($file->toString());
+        self::assertSame($value, $read->root()->value('credential')->string());
+        self::assertSame('normal', $read->root()->value('key=value')->string());
     }
 
     public function testNewParentValuesRemainInTheirSectionWhenWritten(): void

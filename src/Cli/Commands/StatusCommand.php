@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Cli\Commands;
@@ -52,6 +54,7 @@ final class StatusCommand implements Command
         $console->line();
         $console->line('Archives');
         foreach ($config->archives as $id => $archive) {
+            $id = $archive->id;
             $known = $state->archive($id);
             $zone = $archive->timezone;
             $console->line(sprintf('  %s  %s', $id, $archive->name));

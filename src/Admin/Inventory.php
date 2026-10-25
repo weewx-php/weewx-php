@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Admin;
@@ -67,6 +69,7 @@ final class Inventory
                 $one = $file->root()->optionalSection('Archives')?->optionalSection($archive->id);
                 if ($one?->optional('explicit_mapping')?->bool() === true) {
                     foreach ($one->optionalSection('fields')?->sections() ?? [] as $station => $fields) {
+                        $station = (string) $station;
                         foreach ($fields->keys() as $source) {
                             if ($fields->value($source)->string() === $column) {
                                 $name = $file->root()->optionalSection('Stations')?->optionalSection($station)?->optional('name')?->string() ?? $station;

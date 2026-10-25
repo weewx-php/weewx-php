@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Tick;
@@ -211,6 +213,7 @@ final class Tick
         $heard = $live->lastSeen();
         $stations = [];
         foreach ($this->runtime->config->stations as $id => $station) {
+            $id = $station->id;
             $lastSeen = $heard[$id] ?? null;
             $status = StationWatch::judge($station, $lastSeen, $now);
             $before = $state->station($id);
@@ -238,7 +241,7 @@ final class Tick
             return;
         }
         $forgotten = $live->forgetRaw($now - $settings->rawRetention);
-        $live->replay()->retain(array_keys($this->runtime->config->archives));
+        $live->replay()->retain(array_map('strval', array_keys($this->runtime->config->archives)));
         $live->collector()->prune($now);
         $pruned = $live->prune($now - $settings->liveRetention);
         if ($pruned > 0) {

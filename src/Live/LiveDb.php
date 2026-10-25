@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Live;
@@ -192,7 +194,7 @@ final class LiveDb
                 $this->markPending($packet->dateTime, $intervalSeconds, $archives);
             } else {
                 foreach ($intervals as $id => $seconds) {
-                    $this->markPending($packet->dateTime, $seconds, [$id]);
+                    $this->markPending($packet->dateTime, $seconds, [(string) $id]);
                 }
             }
             return true;

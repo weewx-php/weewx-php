@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Cli\Commands;
@@ -51,6 +53,7 @@ final class CheckConfigCommand implements Command
 
         $problems = 0;
         foreach ($config->archives as $id => $archive) {
+            $id = $archive->id;
             if (!is_file($archive->database)) {
                 $console->line(sprintf('%s: %s does not exist yet; the first tick creates it and %s', $id, $archive->database, self::primaryNote($archive->primary)));
                 continue;
@@ -84,6 +87,7 @@ final class CheckConfigCommand implements Command
             }
         }
         foreach ($config->uploads as $id => $upload) {
+            $id = $upload->id;
             try {
                 $app->runtime()->uploads()->make($upload);
                 $console->line(sprintf('upload %s: %s for %s, ok', $id, $upload->kind->label(), $upload->archive));

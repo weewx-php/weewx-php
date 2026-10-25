@@ -1,5 +1,7 @@
 <?php
 
+// Copyright (c) 2026 Manuel Hilgert <hilman2@gmail.com>
+
 declare(strict_types=1);
 
 namespace WeewxPhp\Archive;
@@ -42,6 +44,7 @@ final class Revisions
         $root->set('data_dir', $config->settings->dataDir);
         $stations = $root->optionalSection('Stations') ?? $root->addSection('Stations');
         foreach ($config->stations as $id => $station) {
+            $id = $station->id;
             ($stations->optionalSection($id) ?? $stations->addSection($id))->set('name', $station->name);
         }
         return $copy->toString();
@@ -53,6 +56,7 @@ final class Revisions
         $hash = hash('sha256', $snapshot);
         $this->db->transaction(function () use ($snapshot, $hash, $config, $now): void {
             foreach ($config->archives as $id => $archive) {
+                $id = $archive->id;
                 $last = $this->db->one('SELECT hash FROM archive_revision WHERE archive = ? ORDER BY boundary DESC LIMIT 1', [$id]);
                 if ($last !== null && $last['hash'] === $hash) {
                     continue;

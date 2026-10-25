@@ -106,6 +106,7 @@ final class Uploads
         $sockets = new BudgetedSocketFactory($this->sockets, $budget);
         $outcome = [];
         foreach ($this->ordered() as $id => $config) {
+            $id = $config->id;
             if ($only !== null && !in_array($id, $only, true)) {
                 continue;
             }
@@ -252,12 +253,12 @@ final class Uploads
     {
         $uploads = $this->config->uploads;
         $waited = [];
-        foreach (array_keys($uploads) as $id) {
+        foreach (array_map('strval', array_keys($uploads)) as $id) {
             $waited[$id] = $this->state->upload($id)->lastRunAt ?? 0;
         }
-        uksort($uploads, static function (string $a, string $b) use ($waited): int {
+        uksort($uploads, static function (int|string $a, int|string $b) use ($waited): int {
             $order = $waited[$a] <=> $waited[$b];
-            return $order === 0 ? strcmp($a, $b) : $order;
+            return $order === 0 ? strcmp((string) $a, (string) $b) : $order;
         });
         return $uploads;
     }

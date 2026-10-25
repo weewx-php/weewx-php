@@ -301,6 +301,7 @@ final class Page
     {
         $out = '<div class="table-scroll"><table class="archive-table"><thead><tr><th>' . $this->t('label.archive') . '</th><th>' . $this->t('label.status') . '</th><th>' . $this->t('label.interval') . '</th><th>' . $this->t('label.last_record') . '</th></tr></thead><tbody>';
         foreach ($this->read->config->archives as $id => $archive) {
+            $id = $archive->id;
             try {
                 $info = ReadModel::archive($archive);
                 $last = $info['last'];
@@ -451,7 +452,7 @@ final class Page
 
     private function archiveConnectionStatus(ArchiveConfig $archive): string
     {
-        $senders = $archive->senders ?? array_keys($this->read->config->stations);
+        $senders = $archive->senders ?? array_map('strval', array_keys($this->read->config->stations));
         if ($senders === []) {
             return 'setup.no_station';
         }
@@ -481,7 +482,7 @@ final class Page
 
     private function archiveSetup(ArchiveConfig $archive, bool $editStations): string
     {
-        $senders = $archive->senders ?? array_keys($this->read->config->stations);
+        $senders = $archive->senders ?? array_map('strval', array_keys($this->read->config->stations));
         $state = $this->archiveConnectionStatus($archive);
         $connected = $state !== 'setup.no_station';
         $mapped = $connected && $state !== 'setup.no_fields';
@@ -500,6 +501,7 @@ final class Page
             $out .= $this->form('archive.stations', ['archive' => $archive->id]) . '<fieldset><legend>' . $this->t('action.connect_station') . '</legend><div class="station-choices">';
             $selected = ($this->draft['action'] ?? '') === 'archive.stations' ? (is_array($this->draft['senders'] ?? null) ? $this->draft['senders'] : []) : $senders;
             foreach ($this->read->config->stations as $id => $station) {
+                $id = $station->id;
                 $out .= '<label><input type="checkbox" name="senders[]" value="' . self::escape($id) . '"' . (in_array($id, $selected, true) ? ' checked' : '') . '><span><strong>' . self::escape($station->name) . '</strong><small>' . self::escape($id) . '</small></span></label>';
             }
             $out .= '</div></fieldset>';
@@ -556,7 +558,7 @@ final class Page
     /** @param array<string, mixed> $query */
     private function fields(array $query): string
     {
-        $id = Input::text($query, 'archive', array_key_first($this->read->config->archives) ?? '');
+        $id = Input::text($query, 'archive', strval(array_key_first($this->read->config->archives) ?? ''));
         $archive = $this->read->config->archive($id);
         $choices = [];
         foreach ($this->read->config->archives as $key => $item) {
@@ -571,7 +573,7 @@ final class Page
             return $out . '<section class="panel empty">' . $this->t('status.no_archives') . '</section>';
         }
         $out .= $this->archiveSetup($archive, false);
-        $senders = $archive->senders ?? array_keys($this->read->config->stations);
+        $senders = $archive->senders ?? array_map('strval', array_keys($this->read->config->stations));
         $schema = ReadModel::archive($archive)['schema'];
         $mapping = new Mapping($archive, $this->read->primary($archive));
         $targets = [];
@@ -641,6 +643,7 @@ final class Page
                     $status = 'conflict';
                 }
                 foreach ($archive->fields as $other => $placements) {
+                    $other = (string) $other;
                     foreach ($placements as $otherSource => $otherTarget) {
                         if ($target !== null && $otherTarget === $target && ($other !== $station || $otherSource !== $source)) {
                             $status = 'conflict';
@@ -824,6 +827,7 @@ final class Page
                     }
                 } elseif (in_array($type, ['archive', 'archive_field'], true)) {
                     foreach ($this->read->config->archives as $id => $archive) {
+                        $id = $archive->id;
                         if ($type === 'archive') {
                             $options[$id] = $archive->name;
                         } else {
@@ -873,6 +877,7 @@ final class Page
         $kind = \WeewxPhp\Upload\Kind::tryFrom($saved?->optional('kind')?->string() ?? Input::text($query, 'kind', 'wunderground')) ?? \WeewxPhp\Upload\Kind::Wunderground;
         $out = '<section class="panel"><h2>' . $this->t('label.uploads') . '</h2><div class="table-scroll"><table><thead><tr><th>' . $this->t('label.name') . '</th><th>' . $this->t('label.service') . '</th><th>' . $this->t('label.archive') . '</th></tr></thead><tbody>';
         foreach ($this->read->config->uploads as $key => $upload) {
+            $key = $upload->id;
             $out .= '<tr><td><a href="' . $this->url('settings', ['upload' => $key]) . '">' . self::escape($key) . '</a></td><td>' . self::escape($upload->kind->label()) . '</td><td>' . self::escape($upload->archive) . '</td></tr>';
         }
         $kinds = [];
@@ -884,6 +889,7 @@ final class Page
             . $this->form('upload.save', ['kind' => $kind->value]) . '<div class="form-grid">' . $this->input('upload', 'label.name', $id, required: true);
         $archives = [];
         foreach ($this->read->config->archives as $key => $archive) {
+            $key = $archive->id;
             $archives[$key] = $archive->name;
         }
         $out .= $this->select('archive', 'label.archive', $archives, $saved?->optional('archive')?->string() ?? '');
