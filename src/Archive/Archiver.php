@@ -362,7 +362,7 @@ final class Archiver
         $resolutions = [];
         foreach (RainCounter::FIELDS as $field) {
             $calibration = $this->config->calibrate[$packet->sender][$field] ?? null;
-            $resolutions[$field] = $step * abs($calibration?->scale ?? 1.0);
+            $resolutions[$field] = $step * abs($calibration === null ? 1.0 : $calibration->scale);
         }
         return $resolutions;
     }
