@@ -19,6 +19,7 @@ final class Weather
 {
     private ?ArchiveReader $reader = null;
     private ?Cache $cache = null;
+    private bool $cacheObserved = false;
     private ?\WeewxPhp\Extension\Registry $extensions = null;
     /** @var array<string, Value|Series|Report> */
     private array $memo = [];
@@ -533,9 +534,10 @@ final class Weather
 
     private function cache(): Cache
     {
-        if ($this->cache === null) {
-            $this->cache = new Cache($this->config->settings);
+        $this->cache ??= new Cache($this->config->settings);
+        if (!$this->cacheObserved) {
             $this->cache->observe($this->archiveConfig);
+            $this->cacheObserved = true;
         }
         return $this->cache;
     }
@@ -551,6 +553,7 @@ final class Weather
         $this->cache?->close();
         $this->reader = null;
         $this->cache = null;
+        $this->cacheObserved = false;
     }
 
     public function __destruct()
